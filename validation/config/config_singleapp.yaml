@@ -16,7 +16,7 @@ storage:
 # "/capacity/userdata/vcfenxd75jiv/shichenrui/ui_tars/ByteDance-Seed/UI-TARS-1.5"
 # /root/verl/checkpoints/verl_osworld_grpo/osworld_all_feasible_reward_script_grpo_k8s_20250826_kx3b6cmj/global_step_26/actor/huggingface
 model:
-  ckpt_path: &default_ckpt_path "/root/verl/checkpoints/verl_osworld_grpo/Single_APP_vllm_logp_pt_w_KL_trainset_cal_osworld_reward_script_grpo_k8s_20250908_qzawosx3/global_step_129/actor/huggingface"
+  ckpt_path: &default_ckpt_path "/mnt/data/models/UI-TARS-1.5-7B"
   replicas:   2          # 并行启动的vllm serve数量，可以写很大，实际最大不超过GPU数
   base_port:  8000
   host: &service_host "0.0.0.0"

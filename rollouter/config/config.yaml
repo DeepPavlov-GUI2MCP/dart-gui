@@ -15,9 +15,7 @@ storage:
     max_texts: &max_texts 35   # 最多保留的文本条数
 
 model:
-  ckpt_path: &default_ckpt_path "/data/liuyang/ByteDance-Seed/UI-TARS-1.5-7B"
-  # "/workspace/codes/verl/checkpoints/verl_osworld_grpo/test_1118_no_DA_20251119_e4zfxzsk/global_step_12/actor/huggingface" # "/data/liuyang/ByteDance-Seed/UI-TARS-1.5-7B"
-  # "/workspace/huggingface/dart-gui-7b"
+  ckpt_path: &default_ckpt_path "/mnt/data/models/UI-TARS-1.5-7B"
   replicas:   2
   save_local: True # save local means save the [pt, images, msgs, reward] to volcano machine
   base_port:  8000
@@ -87,15 +85,6 @@ runner:
 mysql:
   username: "root"
   password: "admin"
-  host: "172.16.0.2"
+  host: "172.17.0.2"
   port: 3306
-  database: "dart_database"
-  # 配置信息
-# DB_CONFIG = {
-#     'host': '172.17.0.4',
-#     'user': 'dart_rollouter',
-#     'password': 'Dt8@Rx9p',
-#     'database': 'dart_database',
-#     'port': 3306,
-#     'charset': 'utf8mb4'
-# }
+  database: "dart_gui"

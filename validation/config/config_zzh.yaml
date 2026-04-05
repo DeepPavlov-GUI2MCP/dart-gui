@@ -16,7 +16,7 @@ storage:
 
 model:
   checkpoint_dir: ""      # 模型热更新，尚未实现
-  ckpt_path: &default_ckpt_path "/workspace/computer-use/code/checkpoints/verl_osworld_grpo/osworld_all_feasible_reward_script_grpo_k8s_0813_n2sbfaec_step_2_12/global_step_12/actor/huggingface"
+  ckpt_path: &default_ckpt_path "/mnt/data/models/UI-TARS-1.5-7B"
   replicas:   8           # 并行启动的vllm serve数量，可以写很大，实际最大不超过GPU数
   base_port:  8000
   host: &service_host "0.0.0.0"

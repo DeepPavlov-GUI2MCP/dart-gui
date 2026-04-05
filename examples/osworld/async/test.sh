@@ -11,7 +11,7 @@ ENGINE=${1:-vllm_osworld}
 
 ray stop
 
-cd /workspace/codes/verl
+cd /mnt/dart-gui
 
 # Initialize Ray cluster for multi-node training
 # Make sure Ray is running on all nodes before executing this script
@@ -38,24 +38,7 @@ echo "To stop monitoring: kill $!"
 
 echo "Detected $N_GPUS GPUs on this machine"
 
-# MODEL_PATH=/workspace/huggingface/dart-gui-7b
-# MODEL_PATH=/data/liuyang/ByteDance-Seed/UI-TARS-1.5-7B
-# MODEL_PATH=/workspace/codes/verl/checkpoints/verl_osworld_grpo/test_1115_20251115_e7gd4jr2/global_step_19/actor/huggingface
-MODEL_PATH=/data/liuyang/ByteDance-Seed/UI-TARS-1.5-7B
-
-#/root/verl/checkpoints/verl_osworld_grpo/vllm_logp_pt_test5_w_KL_trainset15_osworld_reward_script_grpo_k8s_20250906_m3ou6di7/global_step_63/actor/huggingface
-
-#/capacity/userdata/vcfenxd75jiv/shichenrui/ui_tars/ByteDance-Seed/UI-TARS-1.5
-
-# /root/verl/checkpoints/verl_osworld_grpo/pt_test5_w_KL_trainset15_vllm_logp_osworld_reward_script_grpo_k8s_20250905_91ww0y85/global_step_6/actor/huggingface
-
-# /capacity/userdata/vcfenxd75jiv/shichenrui/ui_tars/ByteDance-Seed/UI-TARS-1.5
-
-
-
-#/root/verl/checkpoints/verl_osworld_grpo/osworld_all_feasible_reward_script_grpo_k8s_20250827_2txpd14d/global_step_50/actor/huggingface
-
-#/capacity/userdata/vcfenxd75jiv/shichenrui/ui_tars/ByteDance-Seed/UI-TARS-1.5
+MODEL_PATH=/mnt/data/models/UI-TARS-1.5-7B
 
 # If you are using vllm<=0.6.3, you might need to set the following environment variable to avoid bugs:
 # export VLLM_ATTENTION_BACKEND=XFORMERS
@@ -88,7 +71,7 @@ exec > >(tee logs/${EXPERIMENT_NAME}_1.log) 2>&1
 # export RUN_ID=pengxiang_test_0802_max_variance
 # export EXPERIMENT_NAME=osworld_all_feasible_reward_script_grpo_k8s_0802_8_mb64_micro8
 # export ROLLOUT_SERVER_URL=http://172.19.47.166:15959
-export ROLLOUT_SERVER_URL=http://172.16.0.2:15959
+export ROLLOUT_SERVER_URL=http://172.17.0.1:15959
 
 # training parameters
 adv_estimator=grpo

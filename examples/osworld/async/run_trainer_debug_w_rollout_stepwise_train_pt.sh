@@ -11,7 +11,7 @@ ENGINE=${1:-vllm_osworld}
 
 ray stop
 
-cd 'your workspace path'
+cd /mnt/dart-gui
 
 # Initialize Ray cluster for multi-node training
 # Make sure Ray is running on all nodes before executing this script
@@ -37,7 +37,7 @@ echo "To stop monitoring: kill $!"
 echo "Detected $N_GPUS GPUs on this machine"
 
 
-MODEL_PATH='your model path'
+MODEL_PATH=/mnt/data/models/UI-TARS-1.5-7B
 
 
 
@@ -47,17 +47,17 @@ MODEL_PATH='your model path'
 # export SWAN_FS_GROUP_HOOK='your feishu group hook'
 
 
-export ROLLOUTER_DATA_DIR='your data dir'
-export RUN_ID='your run id'
+export ROLLOUTER_DATA_DIR=rollouter/results
+export RUN_ID=results/run_default
 export EXPERIMENT_NAME="DART-GUI-TRAIN_$(date +%Y%m%d)_$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 8 | head -n 1)"
-export ROLLOUT_SERVER_URL='your rollout server url' # http://<your rollout server url>:15959
+export ROLLOUT_SERVER_URL=http://172.17.0.1:15959
 
 # Database configuration
-export DB_HOST='your db host'
+export DB_HOST='172.17.0.2'
 export DB_USER='root'
-export DB_PASSWORD='your db root password'
-export DB_DATABASE='your db database'
-export DB_PORT='your db port'
+export DB_PASSWORD='admin'
+export DB_DATABASE='dart_gui'
+export DB_PORT='3306'
 export DB_CHARSET='utf8mb4'
 
 
