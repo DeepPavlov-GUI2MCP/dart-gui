@@ -312,9 +312,9 @@ class TrajectoryRunnerActor:
 
     
     async def _call_prelaunched_model(self, messages, model_cfg):
-        
+        api_key = getattr(model_cfg, "api_key", None) or "EMPTY"
         vlm = OpenAI(
-            api_key="EMPTY", 
+            api_key=api_key,
             base_url=model_cfg.base_url)
         
         response = vlm.chat.completions.create(

@@ -46,7 +46,8 @@ runner:
     os_type: "Ubuntu"
     require_a11y_tree: False
 
-  prelaunched_model:    # 分支方案，未成功获取vllm serve端口时，读取已启动的模型端口，用于测试
+  prelaunched_model:    # fallback: use a pre-launched OpenAI-compatible server when model_pool is unavailable
+    api_key: null              # optional; falls back to OPENAI_API_KEY env var, then "EMPTY"
     base_url: "https://sv-98272fdc-4f22-4a25-ba0e-7d51a37448d3-8000-x-defau-51acffd7d9.sproxy.hd-01.alayanew.com:22443/v1"
     model: "ui_tars_1.5"
     frequency_penalty: 1

@@ -92,6 +92,9 @@ celerybeat-schedule
 # dotenv
 .env
 
+# active rollout config (copy from a config_example_*.yaml and fill secrets)
+validation/config/config.yaml
+
 # virtualenv
 venv/
 .venv/

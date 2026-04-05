@@ -1,0 +1,73 @@
+task:
+  task_file: "evaluation_examples/test_all.json"
+  osworld_root: "./evaluation_examples/examples_processed_03_plan_image"
+  resume: False
+
+storage:
+  root: "results/openai_run"
+
+  splitter:
+    output_dir: "splitted_traj"
+    window_size: 5
+    stride_size: 5
+    max_images:  &max_images 5
+    max_texts: &max_texts 30
+
+model:
+  checkpoint_dir: ""
+  ckpt_path: ""
+  replicas: 0
+  base_port: 8000
+
+env:
+  server_url: &server "http://112.125.88.107:4999"
+  user_token: &token "user5"
+
+coordinator:
+  max_concurrent_envs: 70
+  max_task_queue_size: 1
+  rollout_n: 1
+
+runner:
+  max_steps: 100
+  max_images: *max_images
+  max_texts:  *max_texts
+  write_to_mysql: False
+
+  env:
+    server_url: *server
+    user_token: *token
+    max_retries: 3
+    action_space: "pyautogui"
+    screen_size: (1920, 1080)
+    headless: True
+    os_type: "Ubuntu"
+    require_a11y_tree: False
+
+  prelaunched_model:
+    api_key: null              # set to your OpenAI key here; DO NOT commit a real key
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o"
+    frequency_penalty: 0
+    max_tokens: 500
+    temperature: 0.7
+    top_p: 1
+    seed: 1
+
+  model_pool:
+    timeout: 10
+    retries: 5
+    backoff: 2
+    frequency_penalty: 0
+    temperature: 0.7
+    top_p: 1
+    max_tokens: 500
+    seed:
+    endpoint: "http://127.0.0.1:8000"
+
+mysql:
+  username: "teamx"
+  password: ""
+  host: "112.125.88.107"
+  port: 5906
+  database: "TeamX_BIGAI"

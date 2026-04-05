@@ -1,6 +1,28 @@
 
-
 # computer-use-rollout
+
+## Configuration
+
+Copy a template config to `config/config.yaml` (which is git-ignored) and fill in secrets there:
+
+```bash
+# Example: use the OpenAI template
+cp validation/config/config_example_openai.yaml validation/config/config.yaml
+# Then open config.yaml and set api_key to your real key
+```
+
+Available templates:
+- `config_example.yaml` — local vLLM (UI-TARS) setup
+- `config_example_openai.yaml` — OpenAI API setup
+- `config_singleapp.yaml`, `config_zzh.yaml` — other team configurations
+
+Run with:
+```bash
+cd validation
+python run.py  # uses config/config.yaml by default
+# or pick a different config explicitly:
+python run.py --config-name config_example_openai
+```
 
 ## Graphs
 
