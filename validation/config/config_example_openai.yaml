@@ -29,6 +29,7 @@ coordinator:
   rollout_n: 1
 
 runner:
+  model_type: "openai"
   max_steps: 100
   max_images: *max_images
   max_texts:  *max_texts

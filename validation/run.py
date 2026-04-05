@@ -43,20 +43,8 @@ async def async_main(config=None):
     mysql_writer = MySQLWriterActor.remote(config.mysql)
    
     model_pool = None
-    model_pool = ModelServicePool.remote(model_cfg=config.model)
-    
-    # # 等待模型服务池准备就绪
-    # logger.info("等待模型服务池准备就绪...")
-    # ready = await model_pool.wait_for_model_pool_ready.remote(timeout=600)
-    # if ready:
-    #     replicas = await model_pool.get_replicas.remote()
-    #     logger.info(f"模型服务池已准备就绪，已启动 {replicas} 个服务实例")
-    # else:
-    #     logger.error("模型服务池未能在规定时间内准备就绪")
-    #     # 打印当前状态信息用于调试
-    #     endpoints = await model_pool.get_endpoints.remote()
-    #     logger.info(f"当前端点列表: {endpoints}")
-    #     return
+    if getattr(config.model, "service_endpoint", None):
+        model_pool = ModelServicePool.remote(model_cfg=config.model)
 
      # env环境清空
     release_env(config.env.server_url,config.env.user_token)

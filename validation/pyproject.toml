@@ -1,17 +1,13 @@
-[
-tool.uv.index
-]
+[[tool.uv.index]]
 name = "tsinghua"
 url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
 default = true
-trusted-host = ["pypi.tuna.tsinghua.edu.cn"]
-
 
 [project]
 name = "verl"
 version = "0.1.0"
 description = "verl_wu environment"
-requires-python = ">=3.10,<3.11"
+requires-python = ">=3.10"
 dependencies = [
     "accelerate==1.6.0",
     "agentenv==0.0.1",

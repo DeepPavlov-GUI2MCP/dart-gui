@@ -39,6 +39,7 @@ coordinator:
 
 
 runner:
+  model_type: "qwen25vl"
   max_steps:  100
   max_images: *max_images    #在storage.splitter的同名字段中修改
   max_texts:  *max_texts    
