@@ -200,34 +200,33 @@ unzip Ubuntu.qcow2.zip
 
 ## Sanity Check (single-task smoke test)
 
-`/mnt/dart-gui/evaluation_examples/sanity_check.json` contains one task per domain
-(chrome, gimp, libreoffice_calc, libreoffice_impress, libreoffice_writer, multi_apps,
-os, thunderbird, vlc, vs_code). Use it to verify the environment + agent pipeline.
+Use `validation/run.py` (Hydra-based runner with Ray) against
+`validation/evaluation_examples/test_single.json` to verify the environment + agent
+pipeline. The task file contains a single Chrome task.
 
-**Venv:** `/mnt/dart-gui/.venv` — contains deps for `GUI-Docker-Env` modules.
+**Venv:** `/mnt/dart-gui/.venv` — contains deps for the validation runner.
 
-**Script:** `/mnt/dart-gui/scripts/sanity_check.py` — standalone script that imports
-`GUI-Docker-Env` modules directly (adds them to `sys.path`). Accepts `--domain`
-(default `chrome`), `--model`, `--max_steps`, `--provider_name`, `--observation_type`,
-`--result_dir`, and other run flags.
+**Config:** Create or copy a Hydra config under `validation/config/` that points to the
+local Desktop Server. Use `config_example_openai.yaml` as a starting template and
+override `task.task_file`, `env.*`, and `runner.env.*` for the local environment:
 
 ```bash
 source /mnt/dart-gui/.venv/bin/activate
+cd /mnt/dart-gui/validation
 
-# Run the default chrome task
-python /mnt/dart-gui/scripts/sanity_check.py
-
-# Run a specific domain
-python /mnt/dart-gui/scripts/sanity_check.py --domain os
-
-# Run all domains (one task each)
-python /mnt/dart-gui/scripts/sanity_check.py --domain all
-
-# Override model / steps
-python /mnt/dart-gui/scripts/sanity_check.py --domain chrome --model gpt-4o --max_steps 5
+# Run with a config override pointing to test_single.json and the local desktop server
+python run.py --config-name config_example_openai \
+  task.task_file=evaluation_examples/test_single.json \
+  env.server_url=http://localhost:50003 \
+  env.user_token=dart \
+  runner.env.server_url=http://localhost:50003 \
+  runner.env.user_token=dart \
+  coordinator.max_concurrent_envs=1 \
+  coordinator.rollout_n=1 \
+  storage.root=results/sanity
 ```
 
-Results are written to `/mnt/dart-gui/results_sanity/` by default (override with `--result_dir`).
+Results are written to `validation/results/sanity/` (override with `storage.root`).
 
 **Install / refresh deps:**
 
@@ -238,7 +237,8 @@ uv pip install tqdm gymnasium wrapt_timeout_decorator \
   requests-toolbelt lxml cssselect xmltodict \
   openai tiktoken Pillow backoff \
   openpyxl python-docx python-pptx pypdf rapidfuzz \
-  playwright pandas pyacoustid librosa fastdtw pytz
+  playwright pandas pyacoustid librosa fastdtw pytz \
+  ray hydra-core
 ```
 
 ## GPU Components (not on this machine)
