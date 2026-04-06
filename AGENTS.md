@@ -198,6 +198,49 @@ wget https://huggingface.co/datasets/xlangai/ubuntu_osworld/resolve/main/Ubuntu.
 unzip Ubuntu.qcow2.zip
 ```
 
+## Sanity Check (single-task smoke test)
+
+`/mnt/dart-gui/evaluation_examples/sanity_check.json` contains one task per domain
+(chrome, gimp, libreoffice_calc, libreoffice_impress, libreoffice_writer, multi_apps,
+os, thunderbird, vlc, vs_code). Use it to verify the environment + agent pipeline.
+
+**Venv:** `/mnt/dart-gui/.venv` — contains deps for `GUI-Docker-Env` modules.
+
+**Script:** `/mnt/dart-gui/scripts/sanity_check.py` — standalone script that imports
+`GUI-Docker-Env` modules directly (adds them to `sys.path`). Accepts `--domain`
+(default `chrome`), `--model`, `--max_steps`, `--provider_name`, `--observation_type`,
+`--result_dir`, and other run flags.
+
+```bash
+source /mnt/dart-gui/.venv/bin/activate
+
+# Run the default chrome task
+python /mnt/dart-gui/scripts/sanity_check.py
+
+# Run a specific domain
+python /mnt/dart-gui/scripts/sanity_check.py --domain os
+
+# Run all domains (one task each)
+python /mnt/dart-gui/scripts/sanity_check.py --domain all
+
+# Override model / steps
+python /mnt/dart-gui/scripts/sanity_check.py --domain chrome --model gpt-4o --max_steps 5
+```
+
+Results are written to `/mnt/dart-gui/results_sanity/` by default (override with `--result_dir`).
+
+**Install / refresh deps:**
+
+```bash
+source /mnt/dart-gui/.venv/bin/activate
+uv pip install tqdm gymnasium wrapt_timeout_decorator \
+  docker flask psutil omegaconf requests pyyaml python-dotenv filelock \
+  requests-toolbelt lxml cssselect xmltodict \
+  openai tiktoken Pillow backoff \
+  openpyxl python-docx python-pptx pypdf rapidfuzz \
+  playwright pandas pyacoustid librosa fastdtw pytz
+```
+
 ## GPU Components (not on this machine)
 
 The rollouter and trainer containers require GPUs and run on separate GPU machines.
