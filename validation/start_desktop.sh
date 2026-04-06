@@ -5,9 +5,16 @@ DISPLAY_NUM="${DISPLAY_NUM:-99}"
 SCREEN_RES="${SCREEN_RES:-1920x1080x24}"
 VNC_PORT="${VNC_PORT:-5900}"
 NOVNC_PORT="${NOVNC_PORT:-6080}"
+SERVER_PORT="${SERVER_PORT:-4999}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PYTHON_BIN="${SCRIPT_DIR}/.venv/bin/python"
 
 export DISPLAY=":${DISPLAY_NUM}"
 export XDG_SESSION_TYPE="x11"
+
+if [ ! -x "$PYTHON_BIN" ]; then
+    PYTHON_BIN="python3"
+fi
 
 cleanup() {
     echo "Shutting down desktop stack..."
@@ -41,11 +48,9 @@ echo "Starting noVNC websockify on port $NOVNC_PORT"
 websockify --web "$NOVNC_WEB" "$NOVNC_PORT" "localhost:${VNC_PORT}" &
 sleep 1
 
-SERVER_PORT="${SERVER_PORT:-4999}"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "Starting local_desktop_server on port $SERVER_PORT"
 DISPLAY="$DISPLAY" NOVNC_PORT="$NOVNC_PORT" PORT="$SERVER_PORT" \
-    python3 "$SCRIPT_DIR/local_desktop_server.py" &
+    "$PYTHON_BIN" "$SCRIPT_DIR/local_desktop_server.py" &
 sleep 1
 
 echo "Desktop stack ready."
