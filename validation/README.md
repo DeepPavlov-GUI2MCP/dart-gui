@@ -24,66 +24,6 @@ python run.py  # uses config/config.yaml by default
 python run.py --config-name config_example_openai
 ```
 
-## Local Desktop Environment (no KVM required)
-
-Instead of connecting to a remote QEMU-based env server, you can run a local
-Xvfb desktop on the host and point the validation stack at it. This avoids the
-KVM requirement entirely.
-
-### Prerequisites
-
-```bash
-sudo apt install -y xvfb xfce4 xfce4-terminal x11vnc novnc dbus-x11 scrot
-```
-
-Create the server's Python venv (one-time):
-
-```bash
-cd validation
-uv venv .venv
-source .venv/bin/activate
-uv pip install flask pyautogui requests Pillow
-```
-
-### Quick start
-
-```bash
-# 1. Launch the virtual desktop (Xvfb + Xfce + VNC)
-./validation/start_desktop.sh          # blocks; Ctrl-C to stop
-
-# 2. In another terminal, start the compatibility server
-source validation/.venv/bin/activate
-DISPLAY=:99 python validation/local_desktop_server.py
-# Server listens on http://localhost:4999
-
-# 3. Run the validation pipeline as usual
-cd validation
-python run.py                          # config.yaml already points to localhost:4999
-```
-
-### Viewing the desktop
-
-Open `http://<host>:6080/vnc.html` in a browser (noVNC) or connect a VNC
-client to port 5900.
-
-### Environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `DISPLAY_NUM` | `99` | X display number for Xvfb |
-| `SCREEN_RES` | `1920x1080x24` | Virtual screen resolution |
-| `VNC_PORT` | `5900` | VNC listen port |
-| `NOVNC_PORT` | `6080` | noVNC/websockify listen port |
-| `PORT` | `4999` | Compatibility server HTTP port |
-| `GUEST_SERVER` | *(empty)* | Optional guest Flask server URL (e.g. `http://localhost:5000`) for richer VM operations |
-
-### What the server implements
-
-`local_desktop_server.py` exposes the same REST API that `env_k8s.RemoteDesktopEnv`
-expects (`/server/getAvailableAndLock`, `/server/execute/{id}`, `/server/evaluate/{id}`,
-`/server/release/{id}`, etc.) but runs everything against the local Xvfb display
-instead of a remote QEMU VM.
-
 ## Graphs
 
 ### Architecture diagram
@@ -205,8 +145,6 @@ sequenceDiagram
 ├── ui_tars_utils.py          # 工具：将模型 response 处理成 action，搬运自 verl 项目
 ├── run_model.py              # 启动模型：先运行此脚本，等待模型全部加载成功（约 5 分钟）
 ├── run.py                    # 主流程：程序入口，参数在 config 中设置
-├── local_desktop_server.py   # 本地桌面兼容服务：替代远程 QEMU 环境，在 Xvfb 上运行
-├── start_desktop.sh          # 启动 Xvfb + Xfce + VNC 桌面栈
 │
 ├── scripts
 │   ├── compare_exp_result.py       # 比较两次实验结果，保存 reward 不一致的任务
