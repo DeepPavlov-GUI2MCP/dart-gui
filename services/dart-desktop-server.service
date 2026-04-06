@@ -1,0 +1,16 @@
+[Unit]
+Description=DART-GUI local desktop environment server (port 4999)
+After=network.target xvfb.service docker.service
+Requires=xvfb.service
+
+[Service]
+Type=simple
+WorkingDirectory=/mnt/dart-gui/validation
+Environment=DISPLAY=:99
+Environment=PORT=4999
+ExecStart=/mnt/dart-gui/validation/.venv/bin/python local_desktop_server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
