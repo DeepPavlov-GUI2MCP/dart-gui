@@ -19,5 +19,5 @@ if tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
   exit 0
 fi
 
-RUN_CMD="source ${VENV_ACTIVATE} && cd ${REPO_ROOT}/validation && python model_service.py --config-name config_singleapp model.ckpt_path=ByteDance-Seed/UI-TARS-1.5-7B model.replicas=1 model.base_port=8010 model.host=0.0.0.0 model.service_port=15961 model.vllm_params.gpu_memory_utilization=0.92 +model.vllm_params.max_model_len=8192"
+RUN_CMD="source ${VENV_ACTIVATE} && cd ${REPO_ROOT}/validation && python model_service.py --config-name config_singleapp model.ckpt_path=ByteDance-Seed/UI-TARS-1.5-7B model.replicas=1 model.base_port=8010 model.host=0.0.0.0 model.service_port=15961 model.vllm_params.gpu_memory_utilization=0.92 +model.vllm_params.max_model_len=16384"
 tmux new-session -d -s "${SESSION_NAME}" "bash -lc '${RUN_CMD}'"
