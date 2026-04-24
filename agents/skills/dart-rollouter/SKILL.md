@@ -16,6 +16,23 @@ Use this skill to run the rollouter as a Docker service instead of a native Pyth
 
 If Docker operations fail with `operation not permitted` during image extraction/build, the VM/container is missing required Docker privileges; use a privileged VM/container runtime.
 
+For no-Docker launch, create the project virtualenv first:
+
+```bash
+cd /workspace/dart-gui
+python3 -m venv .venv
+source .venv/bin/activate
+uv pip install tqdm gymnasium wrapt_timeout_decorator \
+  docker flask psutil omegaconf requests pyyaml python-dotenv filelock \
+  requests-toolbelt lxml cssselect xmltodict \
+  openai tiktoken Pillow backoff \
+  openpyxl python-docx python-pptx pypdf rapidfuzz \
+  playwright pandas pyacoustid librosa fastdtw pytz \
+  ray hydra-core
+uv pip install uvicorn fastapi aiohttp pynvml \
+  vllm==0.8.5.post1 torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0
+```
+
 ## Build Image
 
 Use a wrapper Dockerfile:
@@ -99,6 +116,13 @@ cat >/root/onstart.sh <<'EOF'
 exec /workspace/dart-gui/agents/skills/dart-rollouter/no_docker.sh
 EOF
 chmod +x /root/onstart.sh
+```
+
+Then launch manually once to verify:
+
+```bash
+/root/onstart.sh
+tmux ls
 ```
 
 ## External Availability Warning
