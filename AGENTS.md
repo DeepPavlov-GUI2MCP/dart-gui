@@ -129,6 +129,22 @@ Returns `vnc_port`, `server_port`, `chromium_port`, `vlc_port`.
 - noVNC viewer: `http://localhost:<vnc_port>` (default starts at 8006)
 - Built-in viewer: `http://localhost:50003/window`
 
+### 3b. Remote inference (dart-rollouter GPU VM over SSH)
+
+When UITARS / `run_uitars.py` runs on this machine but vLLM lives on the **dart-rollouter** GPU host, keep an SSH session open so **local** ports forward to the VM:
+
+| Local (after tunnel) | Remote (on GPU VM) | Purpose |
+|----------------------|--------------------|---------|
+| `127.0.0.1:8010` | `127.0.0.1:8010` | **vLLM** — OpenAI-compatible `OPENAI_BASE_URL` (not 8000) |
+| `127.0.0.1:15961` | `127.0.0.1:15961` | dart_rollouter **model service** API |
+
+- **`~/.ssh/config`** `Host dart-rollouter` should include `LocalForward` for **8010** and **15961** (same port numbers both sides).
+- **`GUI-Docker-Env`:** `OPENAI_BASE_URL=http://127.0.0.1:8010` in `.env-default` / `.env` (loaded by `mm_agents.env_loader`).
+- **Background tunnel:** `ssh -N dart-rollouter` (leave running while evaluating).
+- **Verify:** `curl -s http://127.0.0.1:8010/health` and `curl -s http://127.0.0.1:15961/status`.
+
+See `agents/skills/dart-rollouter/SKILL.md` for ad-hoc `ssh -L` examples.
+
 ### 4. Desktop Emulator (Docker containers, managed by Desktop Server)
 
 Each emulator is a Docker container running QEMU with an Ubuntu desktop inside. Created/destroyed by the Desktop Server API.

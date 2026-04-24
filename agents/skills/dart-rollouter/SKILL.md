@@ -131,8 +131,9 @@ ssh -L 15961:127.0.0.1:15961 -L 8010:127.0.0.1:8010 <vm-host>
 
 ## Local Access via SSH Tunnel
 
-If provider networking does not expose `15961`/`8010`, forward them to local loopback.
-Use a clean SSH config (`-F /dev/null`) to avoid host-level `LocalForward` conflicts.
+If provider networking does not expose `15961`/`8010`, forward them to **the same ports on localhost** (matches `~/.ssh/config` `Host dart-rollouter` and `GUI-Docker-Env` defaults).
+
+Use a clean SSH config (`-F /dev/null`) only if you need to avoid conflicts with another `LocalForward` on the same ports.
 
 Start tunnel (example for `dart-rollouter` host `84.50.156.126:17110`):
 
@@ -143,17 +144,19 @@ ssh -F /dev/null -N \
   -i /home/pitchblack/.ssh/id_rsa \
   -p 17110 \
   -L 15961:127.0.0.1:15961 \
-  -L 18010:127.0.0.1:8010 \
+  -L 8010:127.0.0.1:8010 \
   root@84.50.156.126
 ```
 
-Health checks from local machine:
+**GUI-Docker-Env / UITARS:** set `OPENAI_BASE_URL=http://127.0.0.1:8010` (see `GUI-Docker-Env/.env-default`). The OpenAI client appends `/v1` for chat completions; vLLM listens on **8010**, not 8000.
+
+Health checks from local machine (with tunnel up):
 
 ```bash
 curl -s http://127.0.0.1:15961/status
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18010/health
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8010/health
 ```
 
 This maps:
 - local `127.0.0.1:15961` -> remote `127.0.0.1:15961` (model service API)
-- local `127.0.0.1:18010` -> remote `127.0.0.1:8010` (vLLM backend health)
+- local `127.0.0.1:8010` -> remote `127.0.0.1:8010` (vLLM OpenAI-compatible API and `/health`)

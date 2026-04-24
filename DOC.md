@@ -158,6 +158,17 @@ Please follow the instructions in the repository below to initialize the environ
 
   * **Repository:** [GUI-Docker-Env](https://github.com/Computer-use-agents/GUI-Docker-Env.git)
 
+### Local laptop + remote dart-rollouter (vLLM over SSH)
+
+On the GPU VM, vLLM exposes an OpenAI-compatible API on **port 8010** (model pool service on **15961**). On your dev machine, forward those ports and point UITARS at localhost **8010**, not 8000:
+
+1. SSH tunnel (or use `Host dart-rollouter` in `~/.ssh/config` with `LocalForward 8010` / `15961`):  
+   `ssh -N -L 8010:127.0.0.1:8010 -L 15961:127.0.0.1:15961 …`
+2. In **`GUI-Docker-Env/.env`**: `OPENAI_BASE_URL=http://127.0.0.1:8010`
+3. Check: `curl -s http://127.0.0.1:8010/health`
+
+Details: `agents/skills/dart-rollouter/SKILL.md`.
+
 -----
 
 ## 5\. Execution

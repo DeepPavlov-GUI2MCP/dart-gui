@@ -3,4 +3,5 @@
 	url = https://github.com/tony-pitchblack/GUI-Docker-Env.git
 [submodule "dart_rollouter"]
 	path = dart_rollouter
-	url = https://github.com/Computer-use-agents/dart_rollouter.git
+	url = https://github.com/DeepPavlov-GUI2MCP/dart_rollouter.git
+	branch = dev
