@@ -31,7 +31,11 @@ uv pip install tqdm gymnasium wrapt_timeout_decorator \
   ray hydra-core
 uv pip install uvicorn fastapi aiohttp pynvml \
   vllm==0.8.5.post1 torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0
+uv pip install transformers==4.51.1 tokenizers==0.21.1 huggingface-hub==0.36.2
 ```
+
+Do not leave `transformers` unpinned when using `vllm==0.8.5.post1`; newer `transformers`
+can cause startup errors such as conflicting `rope_type` vs `type` fields.
 
 ## Build Image
 
