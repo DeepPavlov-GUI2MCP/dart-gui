@@ -22,20 +22,10 @@ For no-Docker launch, create the project virtualenv first:
 cd /workspace/dart-gui
 python3 -m venv .venv
 source .venv/bin/activate
-uv pip install tqdm gymnasium wrapt_timeout_decorator \
-  docker flask psutil omegaconf requests pyyaml python-dotenv filelock \
-  requests-toolbelt lxml cssselect xmltodict \
-  openai tiktoken Pillow backoff \
-  openpyxl python-docx python-pptx pypdf rapidfuzz \
-  playwright pandas pyacoustid librosa fastdtw pytz \
-  ray hydra-core
-uv pip install uvicorn fastapi aiohttp pynvml \
-  vllm==0.8.5.post1 torch==2.6.0 torchvision==0.21.0 torchaudio==2.6.0
-uv pip install transformers==4.51.1 tokenizers==0.21.1 huggingface-hub==0.36.2
+uv pip install -r requirements.txt
 ```
 
-Do not leave `transformers` unpinned when using `vllm==0.8.5.post1`; newer `transformers`
-can cause startup errors such as conflicting `rope_type` vs `type` fields.
+Use `requirements.txt` as the source of truth for runtime package versions.
 
 ## Build Image
 
