@@ -35,7 +35,7 @@ Use a wrapper Dockerfile:
 FROM crpi-iwtwdoj3ikoon38c.cn-beijing.personal.cr.aliyuncs.com/pengxiangli1999/dart-gui:v0
 WORKDIR /workspace/dart-gui/validation
 ENV PYTHONUNBUFFERED=1
-CMD ["bash", "-lc", "source /workspace/dart-gui/.venv/bin/activate && python model_service.py --config-name config_singleapp model.ckpt_path=ByteDance-Seed/UI-TARS-1.5-7B model.replicas=1 model.base_port=8010 model.host=0.0.0.0 model.service_port=15961 model.vllm_params.gpu_memory_utilization=0.92 +model.vllm_params.max_model_len=4096"]
+CMD ["bash", "-lc", "source /workspace/dart-gui/.venv/bin/activate && python model_service.py --config-name config_singleapp model.ckpt_path=ByteDance-Seed/UI-TARS-1.5-7B model.replicas=1 model.base_port=8010 model.host=0.0.0.0 model.service_port=15961 model.vllm_params.gpu_memory_utilization=0.92 +model.vllm_params.max_model_len=8192"]
 ```
 
 Build:
