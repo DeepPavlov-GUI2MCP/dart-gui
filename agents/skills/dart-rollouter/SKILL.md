@@ -128,3 +128,32 @@ You must expose/map VM public ports to these internal ports in your VM provider 
 ```bash
 ssh -L 15961:127.0.0.1:15961 -L 8010:127.0.0.1:8010 <vm-host>
 ```
+
+## Local Access via SSH Tunnel
+
+If provider networking does not expose `15961`/`8010`, forward them to local loopback.
+Use a clean SSH config (`-F /dev/null`) to avoid host-level `LocalForward` conflicts.
+
+Start tunnel (example for `dart-rollouter` host `84.50.156.126:17110`):
+
+```bash
+ssh -F /dev/null -N \
+  -o ExitOnForwardFailure=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -i /home/pitchblack/.ssh/id_rsa \
+  -p 17110 \
+  -L 15961:127.0.0.1:15961 \
+  -L 18010:127.0.0.1:8010 \
+  root@84.50.156.126
+```
+
+Health checks from local machine:
+
+```bash
+curl -s http://127.0.0.1:15961/status
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:18010/health
+```
+
+This maps:
+- local `127.0.0.1:15961` -> remote `127.0.0.1:15961` (model service API)
+- local `127.0.0.1:18010` -> remote `127.0.0.1:8010` (vLLM backend health)
