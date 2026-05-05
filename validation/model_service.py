@@ -20,8 +20,6 @@ from pydantic import BaseModel, Field
 import socket  # 用于端口检查
 from datetime import datetime
 
-from vllm.utils import F
-
 def set_logger(log_file: str = "logs/model_service.log", log_level: int = logging.INFO):
     """
     设置日志记录器，将日志输出到文件和控制台
