@@ -143,7 +143,7 @@ When UITARS / `run_uitars.py` runs on this machine but vLLM lives on the **dart-
 - **Background tunnel:** `ssh -N dart-rollouter` (leave running while evaluating).
 - **Verify:** `curl -s http://127.0.0.1:8010/health` and `curl -s http://127.0.0.1:15961/status`.
 
-See `agents/skills/dart-rollouter/SKILL.md` for ad-hoc `ssh -L` examples.
+See `.cursor/skills/dart-rollouter/SKILL.md` for ad-hoc `ssh -L` examples.
 
 ### 4. Desktop Emulator (Docker containers, managed by Desktop Server)
 

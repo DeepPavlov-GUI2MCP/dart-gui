@@ -66,3 +66,8 @@ Expected ports:
 
 - `15961`: rollouter model service API.
 - `8010`: vLLM OpenAI-compatible API.
+
+## Helper Scripts
+
+- `.cursor/skills/dart-rollouter/no_docker.sh`: starts the documented non-Docker `tmux` session for `model_service.py`.
+- `.cursor/skills/dart-rollouter/docker.sh`: optional legacy Docker-based bootstrap helper if you want to reuse the older container path.
