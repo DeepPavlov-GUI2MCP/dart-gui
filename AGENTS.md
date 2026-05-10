@@ -244,6 +244,25 @@ python run.py --config-name config_example_openai \
 
 Results are written to `validation/results/sanity/` (override with `storage.root`).
 
+## Thunderbird Watcher
+
+Use `GUI-Docker-Env/scripts/monitor_thunderbird_progress.py` to monitor task
+success in real time while a Thunderbird evaluation is running. Launch it in a
+separate terminal so it can refresh continuously without interfering with the
+evaluation process.
+
+```bash
+source /mnt/dart-gui/.venv/bin/activate
+cd /mnt/dart-gui
+python GUI-Docker-Env/scripts/monitor_thunderbird_progress.py \
+  --eval-json validation/evaluation_examples/test_thunderbird_all.json \
+  --results-glob "results_thunderbird_all_*" \
+  --title "Thunderbird Eval Monitor"
+```
+
+If you want to inspect one specific run directory instead of the latest matching
+folder, use `--results-dir GUI-Docker-Env/results_thunderbird_all_<timestamp>`.
+
 **Install / refresh deps:**
 
 ```bash
