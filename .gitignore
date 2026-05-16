@@ -176,5 +176,6 @@ tests/osworld/
 scripts/*
 !scripts/sanity_check.py
 .cursor/plans/
+.cursor/skills/enable-amnezia-vpn/
 
 examples/osworld/async/run_trainer_debug_w_rollout_stepwise_train_pt_huoshan.sh
