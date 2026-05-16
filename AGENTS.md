@@ -263,28 +263,13 @@ python GUI-Docker-Env/scripts/monitor_thunderbird_progress.py \
 If you want to inspect one specific run directory instead of the latest matching
 folder, use `--results-dir GUI-Docker-Env/results_thunderbird_all_<timestamp>`.
 
-## Search-Enabled CoAct Eval
+## CoAct Eval
 
-Use `GUI-Docker-Env/run_coact.py` for the search-enabled CoAct evaluation path
-when you want a large API model to alternate between GUI actions and targeted
-documentation lookup via DuckDuckGo. The GUI/CUA model reads
-`OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, and `OPENAI_CUA_MODEL` from
-`GUI-Docker-Env/.env-default` and `GUI-Docker-Env/.env`, while the coding path
-continues to use the separate `--coding_model` configuration. Enable the search
-tool with `--enable_duckduckgo_search`, and use `--task_id` to run one OSWorld
-task directly by ID or by passing the path to a task JSON under
-`GUI-Docker-Env/evaluation_examples/examples/<domain>/`.
+Use `GUI-Docker-Env/run_coact.py` for the CoAct eval pipeline.
 
-```bash
-source /mnt/dart-gui/.venv/bin/activate
-cd /mnt/dart-gui/GUI-Docker-Env
-python run_coact.py \
-  --task_id dfac9ee8-9bc4-4cdc-b465-4a4bfcd2f397 \
-  --domain thunderbird \
-  --test_config_base_dir evaluation_examples/examples \
-  --enable_duckduckgo_search \
-  --num_envs 1
-```
+For CoAct eval usage, mode behavior, config-vs-args startup rules, and
+per-component subagent customization, use the project skill
+`.cursor/skills/eval-coact/SKILL.md`.
 
 **Install / refresh deps:**
 
