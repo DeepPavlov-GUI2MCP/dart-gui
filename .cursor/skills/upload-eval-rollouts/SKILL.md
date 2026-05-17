@@ -5,39 +5,69 @@ description: Upload DART GUI evaluation rollout result directories to the tony-p
 
 # Upload Eval Rollouts
 
-Use this skill when asked to upload inference results from this repository to Hugging Face.
+Use this skill when asked to upload evaluation results from this repository to Hugging Face.
 
 ## Target
 
-- Hugging Face repo: `tony-pitchblack/dart-gui` (dataset repo; pass `--repo-type dataset` to `hf upload`, since the CLI default is `model`)
-- Result directories:
-  - `GUI-Docker-Env/results`
-  - `GUI-Docker-Env/results_single_proxy`
-  - `GUI-Docker-Env/results_single_task_watch`
+- Hugging Face repo: `tony-pitchblack/dart-gui-eval-rollouts`
+- Reusable uploader: `GUI-Docker-Env/scripts/upload_eval_rollouts.py`
+- Default discovery pattern for listing candidate folders: `GUI-Docker-Env/results*`
 
 ## Workflow
 
-1. Confirm Hugging Face authentication with the HF MCP server first.
-   - Read the MCP tool descriptor before calling any MCP tool.
-   - Call `hf_whoami` and verify the authenticated user is `tony-pitchblack`.
-   - The current HF MCP server is read-only; use it for auth/query verification, then use `hf upload` for the write commit unless a write-capable MCP upload tool is added.
-2. Verify the three local result directories exist.
-3. Activate the local environment before terminal commands:
+1. Confirm authentication.
+   - If the HF MCP server is available, read its tool descriptor first and verify `hf_whoami`.
+   - If MCP is unavailable, use the CLI instead:
 
 ```bash
 source GUI-Docker-Env/.venv/bin/activate
+hf auth whoami
 ```
 
-4. Upload each directory with `hf upload`, preserving the same paths in the repo:
+2. List candidate result folders when needed:
 
 ```bash
-hf upload tony-pitchblack/dart-gui GUI-Docker-Env/results GUI-Docker-Env/results --repo-type dataset --commit-message "Upload inference results"
-hf upload tony-pitchblack/dart-gui GUI-Docker-Env/results_single_proxy GUI-Docker-Env/results_single_proxy --repo-type dataset --commit-message "Upload single proxy inference results"
-hf upload tony-pitchblack/dart-gui GUI-Docker-Env/results_single_task_watch GUI-Docker-Env/results_single_task_watch --repo-type dataset --commit-message "Upload single task watch inference results"
+source GUI-Docker-Env/.venv/bin/activate
+python GUI-Docker-Env/scripts/upload_eval_rollouts.py --list
 ```
 
-5. If a result directory is large or the upload is interrupted, retry that directory with `hf upload-large-folder`.
+3. Upload only the folders the user asked for.
+   - Pass explicit folder paths relative to the workspace root.
+   - The script preserves the same folder path inside the dataset repo.
+
+```bash
+source GUI-Docker-Env/.venv/bin/activate
+python GUI-Docker-Env/scripts/upload_eval_rollouts.py \
+  GUI-Docker-Env/results_coact_source_readpage_verify_20260511_000535 \
+  GUI-Docker-Env/results_thunderbird_all_20260510_025056
+```
+
+4. Use globs when the user specifies a family of result folders:
+
+```bash
+source GUI-Docker-Env/.venv/bin/activate
+python GUI-Docker-Env/scripts/upload_eval_rollouts.py \
+  --glob "GUI-Docker-Env/results_coact_uitars_gui_agent_thunderbird_*"
+```
+
+5. Dry-run before uploading if the selection is unclear:
+
+```bash
+source GUI-Docker-Env/.venv/bin/activate
+python GUI-Docker-Env/scripts/upload_eval_rollouts.py \
+  --dry-run \
+  GUI-Docker-Env/results_coact_source_readpage_verify_20260511_000535
+```
+
+## Notes
+
+- The script uploads each selected folder independently, so you can reuse it without syncing unrelated results.
+- Missing folders fail fast by default; use `--skip-missing` only when that behavior is explicitly useful.
+- `--include` and `--exclude` forward directly to the Hugging Face upload API when you want a filtered upload.
 
 ## Reporting
 
-Report which directories uploaded successfully and mention any directory that was missing or failed.
+Report:
+- which folders were uploaded
+- the commit URL returned for each folder
+- any missing or failed folder selections
