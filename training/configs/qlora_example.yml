@@ -1,0 +1,50 @@
+train_qlora:
+  model:
+    base_model: ByteDance-Seed/UI-TARS-1.5-7B
+    chat_template: qwen3
+    sequence_len: 2048
+
+  dataset:
+    repo_id: mlabonne/FineTome-100k
+    split: train[:8]
+    type: chat_template
+    field_messages: conversations
+    message_property_mappings:
+      role: from
+      content: value
+
+  hf:
+    api_key: ${HUGGINGFACE_API_KEY}
+
+  hub:
+    push_to_hub: true
+    model_id: your-hf-username/ui-tars-qlora-example
+    private: true
+    strategy: checkpoint
+
+  output:
+    output_dir: outputs/qlora/ui-tars-example
+    generated_config_dir: outputs/qlora/generated_configs
+    dataset_prepared_path: outputs/qlora/prepared/ui-tars-example
+    datasets_dir: datasets/runtime
+
+  training:
+    micro_batch_size: 1
+    gradient_accumulation_steps: 2
+    max_steps: 5
+    learning_rate: 0.0002
+    warmup_steps: 1
+    logging_steps: 1
+    evals_per_epoch: 0
+    saves_per_epoch: 1
+
+  lora:
+    lora_r: 16
+    lora_alpha: 32
+    lora_target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - down_proj
+      - up_proj

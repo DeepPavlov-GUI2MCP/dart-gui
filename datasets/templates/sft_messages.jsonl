@@ -1,0 +1,2 @@
+{"messages":[{"role":"system","content":"You are a concise computer-use assistant."},{"role":"user","content":"Open the browser and navigate to the project dashboard."},{"role":"assistant","content":"I will open the browser, enter the dashboard URL, and verify that the page loads."}]}
+{"messages":[{"role":"user","content":"Find the latest evaluation result and summarize it."},{"role":"assistant","content":"I will inspect the evaluation results, identify the latest run, and summarize the outcome and key metrics."}]}

@@ -120,6 +120,9 @@ ENV/
 
 # data
 *.parquet
+datasets/*
+!datasets/templates/
+!datasets/templates/**
 
 
 # local logs
