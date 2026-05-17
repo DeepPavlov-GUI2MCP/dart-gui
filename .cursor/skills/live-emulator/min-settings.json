@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "coordinate_policy": {
+    "min_x_mode": "left_margin",
+    "min_y_mode": "top_margin",
+    "max_x_mode": "screen_width_minus_window_width_minus_right_margin",
+    "max_y_mode": "screen_height_minus_window_height_minus_bottom_margin",
+    "clamp_by_default": true
+  },
+  "defaults": {
+    "min_width": 900,
+    "min_height": 700,
+    "margins": {
+      "left": 0,
+      "top": 0,
+      "right": 0,
+      "bottom": 0
+    }
+  },
+  "entries": [
+    {
+      "app": "thunderbird",
+      "task_id": "08c73485-7c6d-4681-999d-919f5c32dcfa",
+      "screen_size": [
+        1920,
+        1080
+      ],
+      "min_width": 1180,
+      "min_height": 820,
+      "margins": {
+        "left": 0,
+        "top": 0,
+        "right": 12,
+        "bottom": 40
+      },
+      "notes": "Example empirical threshold for the Thunderbird filter-management task."
+    }
+  ]
+}

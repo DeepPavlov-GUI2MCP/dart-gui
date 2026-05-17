@@ -38,7 +38,18 @@ Copy examples into:
 
 - `GUI-Docker-Env/configs/coact/local/`
 
+Always copy a committed example into `GUI-Docker-Env/configs/coact/local/` before editing. Do not edit the committed example files in place.
+
 Local copied configs are expected to be fully filled, standalone, and selected directly with `--config`.
+
+When preparing a local config:
+
+- Fill every backend value needed by the selected models directly in the copied config.
+- Do not leave `api_key` or `base_url` blank if that backend requires them.
+- Do not rely on `.env`, `.env-default`, or legacy args-mode fallbacks to silently provide missing config values.
+- If a required value is missing, stop and ask the user for it.
+- For OpenAI-hosted or OpenAI-compatible hosted models, ask for the API token if it is not already available.
+- For self-hosted OpenAI-like models, ask for the base URL and token/API key if either is missing.
 
 ## Per-Component Customization
 
@@ -54,6 +65,8 @@ In config mode, put these under:
 - `coact.gui`
 - `coact.coding`
 
+Config-mode backend entries should be explicit and complete for the run you are launching. If the user wants an OpenAI-backed run, write the actual OpenAI `base_url` and token into the local copied config. If the user wants a self-hosted backend, write the actual server URL and token into the local copied config.
+
 In args mode, use:
 
 - `--orchestrator_model`, `--orchestrator_base_url`, `--orchestrator_api_key`
@@ -67,6 +80,14 @@ Use config mode when you want multiple reusable setups with different private UR
 - `default`: GUI stays computer-only. Orchestrator research tools are only available if explicitly enabled.
 - `search-first`: orchestrator gets `web_search` and `read_webpage`, and the prompt requires research before planning or GUI delegation.
 - `inspect-source-first`: orchestrator gets `web_search` and `read_webpage`, but source inspection is optional guidance rather than a hard precondition.
+
+## Desktop Emulator Tokens
+
+- Use only `1` desktop emulator token for CoAct eval runs.
+- Keep `--num_envs 1` for args-mode launches and keep config-mode concurrency at one emulator as well.
+- If `0` desktop emulator tokens are free, stop and prompt the user to take action.
+- Never kill active emulators without asking the user first.
+- If capacity is full, ask whether the user wants to stop a specific emulator themselves, wants you to stop a specific emulator, or wants to wait.
 
 ## Usage
 
@@ -109,3 +130,4 @@ Use `--task_id` to run one OSWorld task directly by ID or by passing the path to
 - In config mode, metadata should reflect the resolved config values, not just the config path.
 - The current `.env-default` values are legacy args-mode fallbacks, not the preferred way to vary CoAct eval backends.
 - If you are documenting or discussing this pipeline, call it `CoAct eval`, not `search-enabled`.
+- Treat emulator capacity as a user-controlled resource, not something the agent may reclaim automatically.
