@@ -165,6 +165,7 @@ ray_log/
 job_logs/
 ray_job_logs/
 outputs/
+synthetic_data/
 computer-use-rollout-dev-zzh.zip
 pengxiang_traj.tar.gz
 pass32_uitars_0928
