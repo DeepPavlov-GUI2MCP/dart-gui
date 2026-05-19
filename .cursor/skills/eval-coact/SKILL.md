@@ -1,133 +1,214 @@
 ---
 name: eval-coact
-description: Run and customize the CoAct eval pipeline in GUI-Docker-Env. Use when working with `GUI-Docker-Env/run_coact.py`, CoAct eval configs, orchestrator/gui/coding backend settings, or CoAct eval mode behavior.
+description: Run and customize the CoAct eval pipeline in GUI-Docker-Env. Use for `run_coact.py`, CoAct configs, orchestrator/gui/coding backends, Codex+MCP CLI rollouts, and capturing synthetic dataset trajectories from prepared task JSONs.
 disable-model-invocation: true
 ---
 
 # CoAct Eval
 
-Use this skill when you need to run or customize the CoAct eval pipeline in `GUI-Docker-Env/run_coact.py`.
+Use this skill for `GUI-Docker-Env/run_coact.py`: standard OSWorld evals, orchestrated CoAct runs, and **synthetic dataset rollouts** (Codex agent + MCP `computer` tool over prepared task/plan JSONs).
 
 ## Overview
 
-The CoAct eval path is split into three independently configurable components:
+Three independently configurable components:
 
 - `orchestrator` — planning plus optional `web_search` / `read_webpage`
-- `gui` — computer-only execution via the `computer` tool
-- `coding` — optional coding subagent used when `enable_coding_agent` is on
+- `gui` — computer-only execution (`openai` CUA, `vllm` UI-TARS, or `cli` Codex+MCP)
+- `coding` — optional coding subagent when `enable_coding_agent` is on
 
-The GUI component is computer-only in all modes. Research tools belong to the orchestrator side only.
+Research tools belong to the orchestrator only. The GUI path is computer-only in all modes.
 
-## Startup Modes
+## Synthetic dataset rollouts (primary workflow)
 
-`run_coact.py` supports exactly one of these modes per run:
+Use this when a task JSON already contains the full GUI plan in `instruction` (e.g. Thunderbird `exponential_50_20` train tasks). Skip the orchestrator and run Codex with MCP against the live emulator.
 
-- config mode: pass one fully specified config with `--config`
-- args mode: pass the per-setting CLI flags directly
+### Dataset layout
 
-Do not mix `--config` with other `run_coact.py` flags.
+Tasks and rollouts live under a named dataset directory (e.g. `exponential_50_20`):
 
-## Config Layout
+```
+{datasets_root}/{dataset_name}/
+  split_golden.csv | split_train.csv | split_test.csv
+  golden/tasks/golden.json
+  train/tasks/train_0001.json …
+  test/tasks/test_0001.json …
+  {golden|train|test}/rollouts/{task_id}/{rollout_id}/
+```
 
-Keep committed example configs under:
+- **Tasks:** OSWorld-shaped JSON (`id`, `snapshot`, `instruction`, `config`, `evaluator`). The `instruction` field is the agent prompt (often a step-by-step plan).
+- **Rollouts:** one timestamped folder per CoAct run. `rollout_id` defaults to UTC `YYYYMMDDTHHMMSSZ`; override with `--rollout-id`.
+
+`run_coact.py` detects synthetic layout when `--task_id` points at `…/{split}/tasks/{task_id}.json` (`split` ∈ `golden`, `train`, `test`). Artifacts are written under `…/{split}/rollouts/{task_id}/{rollout_id}/`, not under `--result_dir/coact/…`.
+
+Example dataset root:
+
+`synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/datasets/exponential_50_20/`
+
+### Prepare tasks
+
+Regenerate task JSONs after CSV edits:
+
+```bash
+python synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/scripts/generate_pref_tasks.py
+```
+
+One-time migration from legacy flat layout (`train/train_0001.json`) to `train/tasks/`:
+
+```bash
+python synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/scripts/group_dataset_tasks.py
+```
+
+### Prerequisites
+
+1. **Desktop server** on `http://localhost:50003` (`curl -s http://localhost:50003/ping`).
+2. **One free emulator token** — use `--num_envs 1`. If quota is full, ask the user before stopping emulators.
+3. **Codex CLI** on PATH with working `~/.codex` auth (`codex` required when `gui.protocol: cli`).
+4. **Venv:** `source GUI-Docker-Env/.venv/bin/activate` (or `/mnt/dart-gui/.venv` per repo layout).
+
+### Canonical single-task command
+
+```bash
+source GUI-Docker-Env/.venv/bin/activate
+cd GUI-Docker-Env
+
+python run_coact.py \
+  --no-orchestrator \
+  --gui_protocol cli \
+  --gui_model gpt-5.4 \
+  --task_id ../synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/datasets/exponential_50_20/train/tasks/train_0001.json \
+  --domain thunderbird \
+  --provider_name docker_server \
+  --num_envs 1 \
+  --cua_max_steps 50 \
+  --gui-cli-timeout-seconds 1200
+```
+
+Notes:
+
+- `--domain` can be `thunderbird` or `all`; domain/id are also read from the JSON (`snapshot`, `id`).
+- `--result_dir` only affects legacy paths and top-level `results_coact/coact/run_metadata_*.json`; synthetic rollouts still land under `…/rollouts/…`.
+- Increase `--cua_max_steps` for multi-pref tasks (e.g. 50 for `train_0026`).
+- Re-run the same `rollout_id` only if you intend to overwrite that folder; each new run gets a new timestamp by default.
+
+### Batch rollouts
+
+Loop over task files (one emulator at a time unless the user approves parallelism):
+
+```bash
+DATASET=../synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/datasets/exponential_50_20
+for task in "$DATASET"/train/tasks/train_00{01..10}.json; do
+  python run_coact.py --no-orchestrator --gui_protocol cli --gui_model gpt-5.4 \
+    --task_id "$task" --domain thunderbird --provider_name docker_server \
+    --num_envs 1 --cua_max_steps 50 --gui-cli-timeout-seconds 1200
+done
+```
+
+Prefer subagents or explicit task lists for large splits; verify `result.txt` and evaluator score after each run.
+
+### Rollout artifacts (CLI + MCP)
+
+Under `{split}/rollouts/{task_id}/{rollout_id}/`:
+
+| File | Role |
+|------|------|
+| `responses.json` | Per-turn model transcript for SFT conversion (`turn_index`, `agent_message`, `actions`, `call_id`) plus `type: "final"` |
+| `tool_events.json` | Action-only `computer_call` log |
+| `cli_turn_0001.jsonl` | Codex event stream (ground-truth order for pairing) |
+| `cli_turn_0001.txt` | Human-readable Codex log |
+| `step_0001.png` … | Screenshots (initial + one per tool step) |
+| `history_inputs.json` | Harness message list |
+| `result.txt` | Evaluator score (`1.0` = pass) |
+| `metadata.json` | Run settings; `dataset.rollout_dir`, `rollout_id`, `split` |
+| `planning/instruction.txt` | Exact prompt sent to Codex |
+| `.codex/` | Isolated `CODEX_HOME` for this rollout |
+
+### `responses.json` pairing (CLI)
+
+Built chronologically from `cli_turn_0001.jsonl` + `tool_events.json`:
+
+1. Walk jsonl `item.completed` events in order.
+2. Each non-terminal `agent_message` pairs with the **next** `computer` tool call → one tool turn.
+3. Terminal-only messages (`TERMINATE`, `IDK`, or short terminate-only text) → **`type: "final"` only**, not merged into a tool turn.
+4. Back-to-back `computer` calls without a new message → empty `agent_message` on the extra turn.
+
+Codex is instructed to finish GUI work first, then send a message-only `TERMINATE` with no further `computer` calls. Use `cli_turn_0001.jsonl` to debug pairing; do not train on tool turns after a terminal message.
+
+### Config-mode equivalent
+
+Copy `configs/coact/examples/no_orchestrator.yml` → `configs/coact/local/`, set `gui.protocol: cli`, `gui.model`, API keys, `runtime.provider_name: docker_server`, and `tasks.task_id` to the full path under `…/tasks/`. Launch with `--config` only (no other CLI flags).
+
+## CLI GUI (Codex + MCP `computer` tool)
+
+**Pattern B:** Codex calls a stdio MCP server (`mm_agents/coact/desktop_computer_mcp.py`) exposing a `computer` tool. The server executes OpenAI CUA-style action batches on the VM and returns screenshots.
+
+- Per-rollout `CODEX_HOME` under `<save_path>/.codex/` with isolated `config.toml`.
+- Codex runs with `--dangerously-bypass-approvals-and-sandbox` for non-interactive `exec`.
+- `.rules` in the rollout directory discourages shell `command_execution`; GUI should use MCP only.
+- `--gui-cli-timeout-seconds` (default 300) — use 900–1200 for full Thunderbird pref tasks.
+
+Requires `codex` on PATH. Validate with a single synthetic task before batching.
+
+## No orchestrator (`--no-orchestrator`)
+
+Skips orchestrator for all `gui.protocol` values. Task `instruction` goes directly to the GUI agent (one env loop, or multi-rollout grid if `script_mode: multi-rollout`).
+
+For synthetic datasets, always pair with `gui.protocol: cli` unless the user explicitly wants OpenAI CUA or vLLM UI-TARS.
+
+## Startup modes
+
+Exactly one per run:
+
+- **Config mode:** `--config path/to/local.yml` (no other `run_coact.py` flags).
+- **Args mode:** CLI flags only.
+
+## Config layout
+
+Examples (do not edit in place):
 
 - `GUI-Docker-Env/configs/coact/examples/openai.yml`
 - `GUI-Docker-Env/configs/coact/examples/uitars_gui_agent.yml`
+- `GUI-Docker-Env/configs/coact/examples/no_orchestrator.yml`
 
-Copy examples into:
+Copy to `configs/coact/local/`, fill all required `api_key` / `base_url` values, then run with `--config`.
 
-- `GUI-Docker-Env/configs/coact/local/`
+## Per-component customization
 
-Always copy a committed example into `GUI-Docker-Env/configs/coact/local/` before editing. Do not edit the committed example files in place.
+| Component | Config keys | Args mode |
+|-----------|-------------|-----------|
+| orchestrator | `coact.orchestrator.*` | `--orchestrator_model`, `_base_url`, `_api_key` |
+| gui | `coact.gui.*` (`protocol`, `model`, …) | `--gui_model`, `--gui_protocol`, `--gui_base_url`, `--gui_api_key` |
+| coding | `coact.coding.*` | `--coding_model`, … |
 
-Local copied configs are expected to be fully filled, standalone, and selected directly with `--config`.
+## Mode behavior
 
-When preparing a local config:
+- `default`: GUI computer-only; orchestrator research only if enabled.
+- `search-first`: orchestrator must research before planning/GUI.
+- `inspect-source-first`: research tools on; source inspection encouraged.
 
-- Fill every backend value needed by the selected models directly in the copied config.
-- Do not leave `api_key` or `base_url` blank if that backend requires them.
-- Do not rely on `.env`, `.env-default`, or legacy args-mode fallbacks to silently provide missing config values.
-- If a required value is missing, stop and ask the user for it.
-- For OpenAI-hosted or OpenAI-compatible hosted models, ask for the API token if it is not already available.
-- For self-hosted OpenAI-like models, ask for the base URL and token/API key if either is missing.
+## Desktop emulator tokens
 
-## Per-Component Customization
+- Use **one** emulator: `--num_envs 1`.
+- If **0** tokens free, stop and ask the user — do not kill emulators without permission.
 
-Customize each CoAct eval component independently:
-
-- orchestrator: `model`, `base_url`, `api_key`
-- gui: `model`, `base_url`, `api_key`
-- coding: `model`, `base_url`, `api_key`
-
-In config mode, put these under:
-
-- `coact.orchestrator`
-- `coact.gui`
-- `coact.coding`
-
-Config-mode backend entries should be explicit and complete for the run you are launching. If the user wants an OpenAI-backed run, write the actual OpenAI `base_url` and token into the local copied config. If the user wants a self-hosted backend, write the actual server URL and token into the local copied config.
-
-In args mode, use:
-
-- `--orchestrator_model`, `--orchestrator_base_url`, `--orchestrator_api_key`
-- `--gui_model`, `--gui_base_url`, `--gui_api_key`
-- `--coding_model`, `--coding_base_url`, `--coding_api_key`
-
-Use config mode when you want multiple reusable setups with different private URLs or tokens.
-
-## Mode Behavior
-
-- `default`: GUI stays computer-only. Orchestrator research tools are only available if explicitly enabled.
-- `search-first`: orchestrator gets `web_search` and `read_webpage`, and the prompt requires research before planning or GUI delegation.
-- `inspect-source-first`: orchestrator gets `web_search` and `read_webpage`, but source inspection is optional guidance rather than a hard precondition.
-
-## Desktop Emulator Tokens
-
-- Use only `1` desktop emulator token for CoAct eval runs.
-- Keep `--num_envs 1` for args-mode launches and keep config-mode concurrency at one emulator as well.
-- If `0` desktop emulator tokens are free, stop and prompt the user to take action.
-- Never kill active emulators without asking the user first.
-- If capacity is full, ask whether the user wants to stop a specific emulator themselves, wants you to stop a specific emulator, or wants to wait.
-
-## Usage
-
-Config-mode example:
+## Standard OSWorld eval (non-synthetic)
 
 ```bash
-source .venv/bin/activate
-cd GUI-Docker-Env
-python run_coact.py \
-  --config configs/coact/local/openai_thunderbird.yml
-```
-
-Args-mode example:
-
-```bash
-source .venv/bin/activate
+source GUI-Docker-Env/.venv/bin/activate
 cd GUI-Docker-Env
 python run_coact.py \
   --task_id dfac9ee8-9bc4-4cdc-b465-4a4bfcd2f397 \
   --domain thunderbird \
   --test_config_base_dir evaluation_examples/examples \
   --mode search-first \
-  --enable_coding_agent \
-  --orchestrator_model gpt-5.5 \
-  --orchestrator_base_url https://api.openai.com/v1 \
-  --orchestrator_api_key "$OPENAI_API_KEY" \
-  --gui_model gpt-5.5 \
-  --gui_base_url https://api.openai.com/v1 \
-  --gui_api_key "$OPENAI_API_KEY" \
-  --coding_model gpt-5.1-mini \
-  --coding_base_url https://api.openai.com/v1 \
-  --coding_api_key "$OPENAI_API_KEY" \
+  --orchestrator_model gpt-5.5 --gui_model gpt-5.5 \
   --num_envs 1
 ```
 
-Use `--task_id` to run one OSWorld task directly by ID or by passing the path to a task JSON under `GUI-Docker-Env/evaluation_examples/examples/<domain>/`.
+Results go to `--result_dir/coact/{domain}/{task_id}/` unless the task path uses the synthetic `…/tasks/` layout.
 
 ## Notes
 
-- In config mode, metadata should reflect the resolved config values, not just the config path.
-- The current `.env-default` values are legacy args-mode fallbacks, not the preferred way to vary CoAct eval backends.
-- If you are documenting or discussing this pipeline, call it `CoAct eval`, not `search-enabled`.
-- Treat emulator capacity as a user-controlled resource, not something the agent may reclaim automatically.
+- Call this pipeline **CoAct eval**, not `search-enabled`.
+- Config-mode metadata should record resolved backend values, not only the config path.
+- `.env-default` is a legacy args-mode fallback; prefer explicit local configs for reproducible runs.
+- Related: dataset README under `synthetic_data/…/datasets/<name>/README.md`; task generator `scripts/generate_pref_tasks.py`; path helper `mm_agents/coact/synthetic_rollout_paths.py`.
