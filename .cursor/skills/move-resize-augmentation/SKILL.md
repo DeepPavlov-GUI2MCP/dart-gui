@@ -148,7 +148,7 @@ Run a suffix-only smoke from an already-open Config Editor:
 source .venv/bin/activate
 python synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/scripts/capture_pref_split_rollouts.py \
   --emulator-id <emulator_id> \
-  --split-csv synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/splits/pref/exponential_50_20/train.csv \
+  --split-csv synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/datasets/exponential_50_20/split_train.csv \
   --trajectory-id train_0002 \
   --output-root synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/prefix_variation_smoke_template_string_YYYYMMDD \
   --geometry-index 2 \
@@ -166,7 +166,7 @@ Run a full prefix-including smoke from a fresh Thunderbird task state:
 source .venv/bin/activate
 python synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/scripts/capture_pref_split_rollouts.py \
   --emulator-id <emulator_id> \
-  --split-csv synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/splits/pref/exponential_50_20/train.csv \
+  --split-csv synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/datasets/exponential_50_20/split_train.csv \
   --trajectory-id train_0001 \
   --output-root synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/prefix_variation_smoke_template_full_bool_YYYYMMDD \
   --prefix-trace /tmp/thunderbird_config_editor_prefix_trace.json \
