@@ -24,6 +24,7 @@ This skill builds on the live emulator workflow in [../live-emulator/SKILL.md](.
 - If a step has multiple clicked UI elements, write one line per clicked element in the same `step_prompt_xxxx.txt` file.
 - Generate rollout geometries once per trace. Do not resample geometry per step.
 - At each step, restore the default fullscreen rollout, execute the golden action once, then capture screenshots for all rollout geometries from that resulting post-action state.
+- For Thunderbird Config Editor pref-split rollouts, prefer the task-local template-matching capture script over affine-only click estimates. It resolves repeated controls from screenshots and records template match metadata.
 - After prompt files are written, explicitly ask the user which grounding route to use.
 
 ## Helper Scripts
@@ -33,6 +34,12 @@ This skill builds on the live emulator workflow in [../live-emulator/SKILL.md](.
 - `.cursor/skills/move-resize-augmentation/scripts/capture_step_variants.py`
 - `.cursor/skills/move-resize-augmentation/scripts/write_step_prompt.py`
 - `.cursor/skills/move-resize-augmentation/scripts/ground_with_api.py`
+
+Task-local Thunderbird pref-split helpers:
+
+- `synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/scripts/capture_pref_split_rollouts.py`
+- `synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/ui_element_templates_per_step/manifest.json`
+- `synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/ui_element_templates_per_step/*.png`
 
 ## Workflow
 
@@ -103,6 +110,100 @@ python .cursor/skills/move-resize-augmentation/scripts/capture_step_variants.py 
   --window-name thunderbird \
   --by-class
 ```
+
+### Thunderbird Config Editor Pref Splits
+
+Use this path when generating `splits/pref/...` rollouts for Thunderbird task
+`08c73485-7c6d-4681-999d-919f5c32dcfa`, where each rollout edits a different
+preference group and the repeated Config Editor controls need reliable matching
+under moved/resized windows.
+
+The current capture script is:
+
+```bash
+synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/scripts/capture_pref_split_rollouts.py
+```
+
+The current template directory is:
+
+```bash
+synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/ui_element_templates_per_step/
+```
+
+Templates include:
+
+- prefix clicks: Thunderbird Settings sidebar button, Config Editor search result
+- suffix clicks: bool toggle, string edit, int edit, string confirm, int confirm
+
+The script embeds these templates into the guest-side batch and uses a
+normalized-correlation matcher to find real click coordinates from each live
+screenshot. This avoids stale affine estimates for the row action buttons after
+window moves/resizes. Matched `bbox`, center point, template name, and confidence
+are written to each step's `step_metadata.json` under `template_matches`, and the
+corresponding `targets[*].screen_x/screen_y` are updated to the matched center.
+
+Run a suffix-only smoke from an already-open Config Editor:
+
+```bash
+source .venv/bin/activate
+python synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/scripts/capture_pref_split_rollouts.py \
+  --emulator-id <emulator_id> \
+  --split-csv synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/splits/pref/exponential_50_20/train.csv \
+  --trajectory-id train_0002 \
+  --output-root synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/prefix_variation_smoke_template_string_YYYYMMDD \
+  --geometry-index 2 \
+  --overwrite \
+  --sleep-after-action 0.45
+```
+
+Suffix-only captures add a cleanup before `step_0001`: the Config Editor search
+field is focused and cleared so the initial screenshot does not preserve stale
+selected text from a prior live-emulator experiment.
+
+Run a full prefix-including smoke from a fresh Thunderbird task state:
+
+```bash
+source .venv/bin/activate
+python synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/scripts/capture_pref_split_rollouts.py \
+  --emulator-id <emulator_id> \
+  --split-csv synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/splits/pref/exponential_50_20/train.csv \
+  --trajectory-id train_0001 \
+  --output-root synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/prefix_variation_smoke_template_full_bool_YYYYMMDD \
+  --prefix-trace /tmp/thunderbird_config_editor_prefix_trace.json \
+  --prefix-end-step 4 \
+  --geometry-index 2 \
+  --overwrite \
+  --sleep-after-action 0.45 \
+  --by-title \
+  --window-name Thunderbird \
+  --skip-title-check
+```
+
+Use `--skip-title-check` for full-prefix captures because the run starts from the
+Thunderbird mail screen, not from Advanced Preferences. Reset to a fresh task
+state before full-prefix smoke tests so `step_0001` starts from Thunderbird Mail.
+
+Current step granularity guidance for pref-split captures:
+
+- Keep rollout and step numbering 1-based. Never emit `step_0000`.
+- Keep `search_pref` as one bundled step: focus/click Config Editor search,
+  `Ctrl+A`, type the preference name. This mirrors the successful GPT golden
+  trace's repeated search replacement steps.
+- Keep semantic row controls as separate steps: bool toggle, edit pencil, confirm
+  checkmark.
+- For string/int rows, after clicking the edit pencil Thunderbird automatically
+  selects the existing value. Prefer typing the replacement in the next step; an
+  extra `Ctrl+A` is usually redundant unless the script has evidence the field is
+  not selected.
+- Do not merge “edit this preference completely” into one mega-step. Keep
+  repeated deterministic text-entry helpers bundled, but keep state-changing
+  clicks inspectable.
+
+Known smoke roots from the current template-matching implementation:
+
+- `synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/prefix_variation_smoke_template_full_bool_20260519`
+- `synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/prefix_variation_smoke_template_full_string_20260519`
+- `synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/move_resize_augmentation/prefix_variation_smoke_template_full_int_20260519`
 
 7. After screenshots are captured, ask the user which grounding route to use:
    - `agent`: use the agent itself, preferably with subagents to batch rollouts or step ranges
