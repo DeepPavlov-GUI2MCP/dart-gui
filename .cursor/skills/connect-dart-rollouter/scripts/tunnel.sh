@@ -26,7 +26,7 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") <start|stop|restart|status|check|discover>
 
-  start    Launch tunnel in tmux session "${SESSION_NAME}"
+  start    Launch ssh -N in a separate tmux session "${SESSION_NAME}"
   stop     Kill tmux session and tunnel
   restart  stop then start
   status   Show tmux session and listening local ports
@@ -72,14 +72,16 @@ start_tunnel() {
 
   local cmd
   cmd="$(tunnel_cmd)"
-  tmux new-session -d -s "${SESSION_NAME}" "${cmd}"
+  # Dedicated session for ssh -N only; do not add to an existing eval/work session.
+  tmux new-session -d -s "${SESSION_NAME}" -n ssh "${cmd}"
   sleep 1
 
   if ! tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
     echo "FAIL: tmux session ${SESSION_NAME} did not start" >&2
     exit 1
   fi
-  echo "Started tunnel in tmux session: ${SESSION_NAME}"
+  echo "Started ssh tunnel in separate tmux session: ${SESSION_NAME}"
+  echo "Attach: tmux attach -t ${SESSION_NAME}"
   echo "Command: ${cmd}"
 }
 
@@ -95,8 +97,8 @@ stop_tunnel() {
 
 show_status() {
   if tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
-    echo "tmux session: ${SESSION_NAME} (running)"
-    tmux list-panes -t "${SESSION_NAME}" -F '  pane cmd: #{pane_current_command}' 2>/dev/null || true
+    echo "separate tmux session: ${SESSION_NAME} (running)"
+    tmux list-windows -t "${SESSION_NAME}" -F '  window: #{window_name} (#{pane_current_command})' 2>/dev/null || true
   else
     echo "tmux session: ${SESSION_NAME} (not running)"
   fi

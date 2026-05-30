@@ -1,11 +1,26 @@
 ---
 name: connect-dart-rollouter
-description: Start and verify an SSH port-forward tunnel from the local CPU machine to the dart-rollouter GPU VM so vLLM and the model service pool are reachable on localhost. Use when the user asks to connect to dart-rollouter, start the SSH tunnel, forward ports 8010/15961, check remote service aliveness, or run local eval against remote inference.
+description: Start and verify an SSH port-forward tunnel from the local CPU machine to the dart-rollouter GPU VM in a dedicated tmux session so vLLM and the model service pool are reachable on localhost. Use when the user asks to connect to dart-rollouter, start the SSH tunnel, forward ports 8010/15961, check remote service aliveness, or run local eval against remote inference.
 ---
 
 # Connect dart-rollouter
 
 Use this skill to expose remote inference on the local machine. Run eval or UITARS against `http://127.0.0.1:8010` only after the tunnel is up and health checks pass.
+
+## Tmux session (required)
+
+Launch `ssh -N` in a **separate** tmux session named `dart-rollouter-tunnel`. Do not:
+
+- run `ssh -N ... &` in the current shell
+- reuse the eval / desktop-server / monitor tmux session for the tunnel
+
+The tunnel session owns only the port-forward process. Keep eval and other work in other sessions.
+
+```bash
+.cursor/skills/connect-dart-rollouter/scripts/tunnel.sh start   # creates dart-rollouter-tunnel
+tmux ls                                                        # confirm separate session
+tmux attach -t dart-rollouter-tunnel                           # inspect; Ctrl+B then D to detach
+```
 
 ## SSH host
 
@@ -30,7 +45,7 @@ Copy this checklist:
 
 ```
 - [ ] Discover remote ports and services
-- [ ] Start tunnel in tmux (not a detached orphan ssh -N)
+- [ ] Start tunnel in separate tmux session dart-rollouter-tunnel
 - [ ] Verify local listeners
 - [ ] Health-check model service + vLLM
 - [ ] Optional: one inference request
@@ -44,18 +59,18 @@ Copy this checklist:
 
 Confirm vLLM and model service are listening before forwarding.
 
-### 2. Start tunnel in tmux
+### 2. Start tunnel in a separate tmux session
 
-Always use the tmux session so the tunnel stays attached and is easy to stop:
+Use the helper script (preferred) or create the dedicated session manually:
 
 ```bash
 .cursor/skills/connect-dart-rollouter/scripts/tunnel.sh start
 ```
 
-Equivalent manual command:
+Manual equivalent — note the **new session** (`-s dart-rollouter-tunnel`), not a window in an existing session:
 
 ```bash
-tmux new-session -d -s dart-rollouter-tunnel \
+tmux new-session -d -s dart-rollouter-tunnel -n ssh \
   'ssh -N -o ExitOnForwardFailure=yes -o BatchMode=yes \
     -L 8000:127.0.0.1:8000 \
     -L 15959:127.0.0.1:15959 \
@@ -64,7 +79,7 @@ tmux new-session -d -s dart-rollouter-tunnel \
     dart-rollouter'
 ```
 
-Attach to inspect: `tmux attach -t dart-rollouter-tunnel` (Ctrl+B, D to detach).
+Inspect without stopping the tunnel: `tmux attach -t dart-rollouter-tunnel` (Ctrl+B, D to detach).
 
 ### 3. Verify tunnel status
 
@@ -121,6 +136,7 @@ See also: `.cursor/skills/dart-rollouter/SKILL.md` (launch services on the GPU V
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Local port listens, curl gets empty reply | Remote service not running | `tunnel.sh discover`; start model service on VM |
-| Connection refused locally | Tunnel not running | `tunnel.sh start` |
+| Connection refused locally | Tunnel not running | `tunnel.sh start` (separate tmux session) |
+| Tunnel dies when terminal closes | Started outside tmux | Restart with `tunnel.sh start` |
 | vLLM 404 on model name | Wrong model id | Use id from `GET /v1/models` |
 | Docs say 8010/15961 but discover shows 8000/15959 | Port drift on VM | Use alias forwards in this skill |
