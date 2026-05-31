@@ -176,8 +176,19 @@ Copy to `configs/coact/local/`, fill all required `api_key` / `base_url` values,
 | Component | Config keys | Args mode |
 |-----------|-------------|-----------|
 | orchestrator | `coact.orchestrator.*` | `--orchestrator_model`, `_base_url`, `_api_key` |
-| gui | `coact.gui.*` (`protocol`, `model`, …) | `--gui_model`, `--gui_protocol`, `--gui_base_url`, `--gui_api_key` |
+| gui | `coact.gui.*` (`protocol`, `model`, …) | `--gui_model`, `--gui_protocol`, `--gui_base_url`, `--gui_api_key`, `--openai-force-completions-api` |
 | coding | `coact.coding.*` | `--coding_model`, … |
+
+## OpenAI GUI: Completions vs Responses
+
+When `gui.protocol` is `openai` (default), CoAct uses **`/chat/completions` with a `computer` function tool** by default (`--openai-force-completions-api`, enabled unless you pass `--no-openai-force-completions-api`). This works with OpenRouter-style and other chat-only proxies.
+
+- **Default:** in-process DesktopEnv + MCP-compatible CUA action JSON via function calling.
+- **Opt out:** `--no-openai-force-completions-api` uses native OpenAI **`/responses`** + built-in `{type: "computer"}` (requires provider support).
+- **`cli`:** still uses Codex subprocess + stdio MCP (unchanged).
+- **`vllm`:** UI-TARS text actions, no computer tool (unchanged).
+
+YAML: `coact.gui.openai_force_completions_api: true|false`
 
 ## Mode behavior
 
@@ -205,6 +216,22 @@ python run_coact.py \
 ```
 
 Results go to `--result_dir/coact/{domain}/{task_id}/` unless the task path uses the synthetic `…/tasks/` layout.
+
+## Token spending metadata
+
+CoAct records LLM token usage and estimated cost in existing metadata files (not in trace files). There is no `cost.txt`.
+
+| Level | File | `spending` section |
+|-------|------|-------------------|
+| Attempt | `{attempt_dir}/metadata.json` | Per multi-rollout GUI attempt |
+| Task | `{history_save_dir}/metadata.json` | Aggregated attempts (+ planning when orchestrator multi-rollout) |
+| Run | `{result_dir}/coact/run_metadata_latest.json` | Recomputed from all tasks in eval scope on every invocation |
+
+Each `spending` block includes `spending_per_step`, `spending_by_model`, `spending_by_role`, and `spending_total`. Multi-attempt tasks also have `spending_by_attempt`; multi-task runs also have `spending_by_task`, `tasks_included`, and `tasks_missing_spending`.
+
+Run-level totals are always refreshed after the worker pool (or on the “no tasks to process” path) by reading current task-root `metadata.json` files for all selected tasks — partial reruns overwrite only the rerun task’s contribution.
+
+Credentials: `OPENROUTER_*` when set, else `OPENAI_*` from `.env`. Local vLLM (`127.0.0.1:8010`) tracks tokens with `$0` cost.
 
 ## Notes
 
