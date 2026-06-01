@@ -1,10 +1,10 @@
 [submodule "GUI-Docker-Env"]
 	path = GUI-Docker-Env
-	url = https://github.com/tony-pitchblack/GUI-Docker-Env.git
+	url = git@github.com:tony-pitchblack/GUI-Docker-Env.git
 [submodule "dart_rollouter"]
 	path = dart_rollouter
-	url = https://github.com/DeepPavlov-GUI2MCP/dart_rollouter.git
+	url = git@github.com:DeepPavlov-GUI2MCP/dart_rollouter.git
 	branch = dev
 [submodule "axolotl"]
 	path = axolotl
-	url = https://github.com/axolotl-ai-cloud/axolotl
+	url = git@github.com:axolotl-ai-cloud/axolotl.git
