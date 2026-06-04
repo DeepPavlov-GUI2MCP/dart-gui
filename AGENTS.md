@@ -94,8 +94,9 @@ Flask API that manages desktop emulator containers (Ubuntu VMs running in Docker
 **Launch** (requires docker group access):
 
 ```bash
+source .venv/bin/activate
 cd GUI-Docker-Env
-sg docker -c "source .venv/bin/activate && python -m desktop_env.docker_server.server"
+sg docker -c "python -m desktop_env.docker_server.server"
 ```
 
 > The `sg docker` wrapper is required because the user must have Docker socket
@@ -181,7 +182,7 @@ cd GUI-Docker-Env/monitor && sudo docker compose restart
 
 # 3. Desktop Server (kill existing, then relaunch)
 pkill -f "desktop_env.docker_server.server"
-cd GUI-Docker-Env && sg docker -c "source .venv/bin/activate && python -m desktop_env.docker_server.server" &
+source .venv/bin/activate && cd GUI-Docker-Env && sg docker -c "python -m desktop_env.docker_server.server" &
 
 # 4. Verify
 curl -s http://localhost:50003/ping        # Desktop Server
@@ -202,8 +203,7 @@ sudo usermod -aG docker $USER
 sudo docker pull mysql:8.0.44-debian
 sudo docker pull happysixd/osworld-docker
 
-# 4. Desktop Server venv
-cd GUI-Docker-Env
+# 4. Repo venv (desktop server, CoAct, validation)
 python3 -m venv .venv
 source .venv/bin/activate
 uv pip install flask docker psutil omegaconf filelock requests pyyaml python-dotenv

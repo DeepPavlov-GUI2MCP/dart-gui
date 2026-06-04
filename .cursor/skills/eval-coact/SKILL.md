@@ -63,12 +63,12 @@ python synthetic_data/thunderbird/08c73485-7c6d-4681-999d-919f5c32dcfa/scripts/g
 1. **Desktop server** on `http://localhost:50003` (`curl -s http://localhost:50003/ping`).
 2. **One free emulator token** — use `--num_envs 1`. If quota is full, ask the user before stopping emulators.
 3. **Codex CLI** on PATH with working `~/.codex` auth (`codex` required when `gui.protocol: cli`).
-4. **Venv:** `source GUI-Docker-Env/.venv/bin/activate` (or `/mnt/dart-gui/.venv` per repo layout).
+4. **Venv:** from repo root, `source .venv/bin/activate` (single top-level venv; do not use `GUI-Docker-Env/.venv`).
 
 ### Canonical single-task command
 
 ```bash
-source GUI-Docker-Env/.venv/bin/activate
+source .venv/bin/activate
 cd GUI-Docker-Env
 
 python run_coact.py \
@@ -204,7 +204,7 @@ YAML: `coact.gui.openai_force_completions_api: true|false`
 ## Standard OSWorld eval (non-synthetic)
 
 ```bash
-source GUI-Docker-Env/.venv/bin/activate
+source .venv/bin/activate
 cd GUI-Docker-Env
 python run_coact.py \
   --task_id dfac9ee8-9bc4-4cdc-b465-4a4bfcd2f397 \
