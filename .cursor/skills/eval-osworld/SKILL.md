@@ -1,27 +1,48 @@
----
 name: eval-osworld
-description: Run OSWorld GUI evaluations with UI-TARS over dart-rollouter vLLM in a dedicated tmux session, including parallel multi-emulator runs. Use when evaluating OSWorld tasks, running uitars_run/run_uitars.py, checking running emulator quota, choosing emulator/token concurrency, smoke-testing a model endpoint, or checking desktop server + vLLM health before a full eval.
+description: Run OSWorld GUI evaluations against dart-rollouter vLLM in a dedicated tmux session, choosing the correct runner for the live model on the remote host. Use when evaluating OSWorld tasks, checking running emulator quota, choosing emulator/token concurrency, smoke-testing a model endpoint, or checking desktop server + vLLM health before a full eval.
 disable-model-invocation: true
 ---
 
 # Eval OSWorld
 
-Run UI-TARS-1.5 evaluations against OSWorld tasks on the local desktop server, with inference on **dart-rollouter** vLLM over SSH port-forward.
+Run OSWorld evaluations against the local desktop server, with inference on **dart-rollouter** vLLM over SSH port-forward.
+
+## Runner selection (required)
+
+Do **not** assume UI-TARS. First inspect the live model id exposed by vLLM:
+
+```bash
+curl -s http://127.0.0.1:8010/v1/models | python3 -c "import sys,json; print([m['id'] for m in json.load(sys.stdin)['data']])"
+```
+
+Choose the eval entrypoint from the returned model id:
+
+| Live model id contains | Runner | Agent/parser family |
+|------------------------|--------|---------------------|
+| `ui-tars`, `UI-TARS`, `ByteDance-Seed/UI-TARS-1.5-7B` | `uitars_run/run_uitars.py` | UI-TARS parser |
+| `holo`, `Holo`, `holotron`, `Holotron`, `Hcompany/` | `holo_run/run_holo.py` | Holo structured JSON parser |
+
+If unsure:
+
+- prefer `holo_run/run_holo.py` for `Hcompany/Holotron-*` and `Hcompany/Holo*`
+- prefer `uitars_run/run_uitars.py` only for actual UI-TARS models
+
+Using the wrong runner causes parse failures even when the HTTP call succeeds.
 
 ## Tmux session (required)
 
-**Default:** launch `uitars_run/run_uitars.py` in a **dedicated** detached tmux session named `osworld-eval`. Do **not** run long evals in the agent’s current shell unless the user explicitly asks to (e.g. “run in foreground”, “no tmux”).
+**Default:** launch the selected runner (`uitars_run/run_uitars.py` or `holo_run/run_holo.py`) in a **dedicated** detached tmux session named `osworld-eval`. Do **not** run long evals in the agent’s current shell unless the user explicitly asks to (e.g. “run in foreground”, “no tmux”).
 
 | Session | Purpose |
 |---------|---------|
 | `dart-rollouter-tunnel` | SSH port-forward only — **connect-dart-rollouter** skill |
-| `osworld-eval` | `run_uitars.py` eval only — this skill |
+| `osworld-eval` | Selected OSWorld eval runner only — this skill |
 
 Do not combine tunnel and eval in one tmux session. Preflight, quota checks, and `/set_token_limit` run in the current shell; only the long-running eval goes in `osworld-eval`.
 
 ```bash
 # After preflight — preferred
-EVAL_CMD='source /path/to/dart-gui/.venv/bin/activate && cd /path/to/dart-gui/GUI-Docker-Env && PYTHONPATH=. python uitars_run/run_uitars.py ...' \
+EVAL_CMD='source /path/to/dart-gui/.venv/bin/activate && cd /path/to/dart-gui/GUI-Docker-Env && PYTHONPATH=. python <selected-runner>.py ...' \
   bash .cursor/skills/eval-osworld/scripts/run_eval.sh start
 
 bash .cursor/skills/eval-osworld/scripts/run_eval.sh status   # running? recent log tail
@@ -29,7 +50,7 @@ tmux attach -t osworld-eval                                   # live output; Ctr
 bash .cursor/skills/eval-osworld/scripts/run_eval.sh stop     # kill eval session
 ```
 
-**Opt-out:** If the user says to run in the foreground or without tmux, run `PYTHONPATH=. python uitars_run/run_uitars.py ...` directly and warn that closing the terminal will stop the eval.
+**Opt-out:** If the user says to run in the foreground or without tmux, run `PYTHONPATH=. python <selected-runner>.py ...` directly and warn that closing the terminal will stop the eval.
 
 ## Required: check quota, then ask emulator allocation
 
@@ -67,20 +88,21 @@ bash .cursor/skills/eval-osworld/scripts/check_emulator_quota.sh   # verify free
 2. Set `--max-workers` to the requested number (parallel task count = parallel emulators).
 3. Set the desktop-server token limit to match (see **Parallel execution** below).
 4. Run preflight with `EMULATOR_COUNT=<n>` so quota is validated before tasks start.
-5. Start `run_uitars.py` via `run_eval.sh start` in tmux `osworld-eval` (unless the user opted out of tmux).
+5. Start the selected runner via `run_eval.sh start` in tmux `osworld-eval` (unless the user opted out of tmux).
 
 If the user did not specify concurrency, ask — do not default to `8`.
 
 ## Canonical model names
 
-Use these spellings in docs, configs, and `--model` when the id is registered on vLLM:
+Use these spellings in docs, configs, and `--model` / `--openai-model` when the id is registered on vLLM:
 
 | Purpose | Name |
 |---------|------|
 | HuggingFace / rollouter ckpt | `ByteDance-Seed/UI-TARS-1.5-7B` |
 | CLI alias (default in `run_uitars.py`) | `ui_tars_1.5` |
+| Holo / Holotron family example | `Hcompany/Holotron-3-Nano` |
 
-**Always resolve the live vLLM model id before eval.** vLLM often exposes a local snapshot path (not the HF name). Query `/v1/models` and use the returned `id` for sanity checks; `UITARSAgent` auto-resolves aliases at runtime.
+**Always resolve the live vLLM model id before eval.** vLLM often exposes a local snapshot path (not the HF name). Query `/v1/models` and use the returned `id` both for runner selection and for sanity checks.
 
 ## Prerequisites
 
@@ -114,11 +136,13 @@ cp GUI-Docker-Env/.env-default GUI-Docker-Env/.env
 
 Ensure `OPENAI_BASE_URL=http://127.0.0.1:8010` is set (do not leave it blank in `.env`; empty overrides the default).
 
-Optional override when vLLM id is known:
+Optional override when the vLLM id is known:
 
 ```bash
 export OPENAI_MODEL='<resolved-id-from-v1-models>'
 ```
+
+For Holo runs, also pass the resolved id via `--openai-model` when needed.
 
 ## Parallel execution
 
@@ -186,7 +210,7 @@ All eval commands use `GUI-Docker-Env/` as cwd and **`PYTHONPATH=.`** (required)
 
 Replace `N` below with the emulator count the user confirmed. Set `REPO` to the dart-gui root (e.g. `/home/pitchblack/dart-gui`).
 
-### Single-task smoke (1 emulator)
+### Single-task smoke (1 emulator, UI-TARS)
 
 Task file: `evaluation_examples/test_writer_first.json` (one task).
 
@@ -211,7 +235,33 @@ EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTH
 bash "${REPO}/.cursor/skills/eval-osworld/scripts/run_eval.sh" start
 ```
 
-### Parallel smoke (2 writer tasks, 2 emulators)
+### Single-task smoke (1 emulator, Holo / Holotron)
+
+```bash
+REPO=/path/to/dart-gui
+source "${REPO}/.venv/bin/activate"
+cd "${REPO}/GUI-Docker-Env"
+
+curl -s -X POST http://127.0.0.1:50003/set_token_limit \
+  -H "Content-Type: application/json" \
+  -d '{"token":"dart","limit":1}'
+
+REQUESTED_MODEL='Hcompany/Holotron-3-Nano' EMULATOR_COUNT=1 \
+  bash "${REPO}/.cursor/skills/eval-osworld/scripts/preflight.sh"
+
+EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTHONPATH=. python holo_run/run_holo.py \
+  --domain libreoffice_writer \
+  --test-all-meta-path evaluation_examples/test_writer_first.json \
+  --max-workers 1 \
+  --max-steps 15 \
+  --model Hcompany/Holotron-3-Nano \
+  --openai-model Hcompany/Holotron-3-Nano \
+  --result-dir results_holo_writer_first \
+  --overwrite"
+bash "${REPO}/.cursor/skills/eval-osworld/scripts/run_eval.sh" start
+```
+
+### Parallel smoke (2 writer tasks, 2 emulators, UI-TARS)
 
 Task file: `evaluation_examples/test_writer_two.json` (first two `libreoffice_writer` tasks).
 
@@ -245,45 +295,46 @@ curl -s http://127.0.0.1:50003/status | python3 -c \
 bash "${REPO}/.cursor/skills/eval-osworld/scripts/run_eval.sh" status
 ```
 
-### Domain subset (N emulators)
+### Domain subset (N emulators, choose runner for live model)
 
 ```bash
-EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTHONPATH=. python uitars_run/run_uitars.py \
+EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTHONPATH=. python <selected-runner>.py \
   --domain libreoffice_writer \
   --test-all-meta-path evaluation_examples/test_all.json \
   --max-workers N \
   --max-steps 15 \
-  --result-dir results_uitars15_writer_$(date +%Y%m%d_%H%M%S)"
+  --result-dir results_osworld_writer_$(date +%Y%m%d_%H%M%S)"
 bash "${REPO}/.cursor/skills/eval-osworld/scripts/run_eval.sh" start
 ```
 
 Resume skips finished tasks unless `--overwrite` is set.
 
-### Full benchmark (nogdrive split)
+### Full benchmark (nogdrive split, choose runner for live model)
 
 Ask the user for emulator count first. Do not use `--max-workers 8` unless token limit is raised in config and the user explicitly requests it.
 
 ```bash
-EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTHONPATH=. python uitars_run/run_uitars.py \
+EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTHONPATH=. python <selected-runner>.py \
   --test-all-meta-path evaluation_examples/test_nogdrive.json \
   --max-workers N \
   --max-steps 15 \
-  --result-dir results_uitars15_nogdrive_$(date +%Y%m%d_%H%M%S)"
+  --result-dir results_osworld_nogdrive_$(date +%Y%m%d_%H%M%S)"
 bash "${REPO}/.cursor/skills/eval-osworld/scripts/run_eval.sh" start
 ```
 
 ## Common flags
 
-| Flag | Default | Notes |
-|------|---------|-------|
-| `--model` | `ui_tars_1.5` | Alias; agent resolves via `/v1/models` |
-| `--model-type` | `qwen25vl` | Keep for UI-TARS-1.5 |
-| `--max-workers` | `8` | **Override** — set to user-requested emulator count |
-| `--max-steps` | `15` | OSWorld step budget per task |
-| `--result-dir` | `./results_chenrui` | Use timestamped dirs for new runs |
-| `--overwrite` | off | Re-run and replace existing results |
-| `--base-url` | `http://127.0.0.1:50003` | Desktop server |
-| `--token` | `dart` | Desktop server auth |
+| Flag | Runner | Notes |
+|------|--------|-------|
+| `--model` | both | Use the resolved live model id when possible |
+| `--openai-model` | Holo | Set to the resolved vLLM model id when Holo model name and API model id differ |
+| `--model-type` | UI-TARS | Keep `qwen25vl` for UI-TARS-1.5 |
+| `--max-workers` | both | **Override** — set to user-requested emulator count |
+| `--max-steps` | both | OSWorld step budget per task |
+| `--result-dir` | both | Use timestamped dirs for new runs |
+| `--overwrite` | both | Re-run and replace existing results |
+| `--base-url` | both | Desktop server |
+| `--token` | both | Desktop server auth |
 
 ## Results layout
 
@@ -302,6 +353,7 @@ Quick pass-rate check: use **analyze-rollouts** skill.
 | Symptom | Fix |
 |---------|-----|
 | `ModuleNotFoundError: mm_agents` | Add `PYTHONPATH=.` |
+| Holo / Holotron model returns parser errors in `run_uitars.py` | Wrong runner for live model | Use `holo_run/run_holo.py` instead |
 | `The model ui_tars_1.5 does not exist` | Run preflight; set `OPENAI_MODEL` to resolved id |
 | vLLM 404 / connection refused | Restore SSH tunnel; verify `curl http://127.0.0.1:8010/health` |
 | `APIConnectionError` mid-run | SSH tunnel dropped — restart tunnel, re-run failed tasks |

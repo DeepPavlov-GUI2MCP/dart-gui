@@ -129,6 +129,17 @@ After the tunnel is healthy, point UITARS / CoAct at:
 
 - `OPENAI_BASE_URL=http://127.0.0.1:8010` in `GUI-Docker-Env/.env`
 
+Before choosing an eval runner, inspect the live model id:
+
+```bash
+curl -s http://127.0.0.1:8010/v1/models | python3 -c "import sys,json; print([m['id'] for m in json.load(sys.stdin)['data']])"
+```
+
+Use that to choose the matching OSWorld runner:
+
+- `uitars_run/run_uitars.py` for UI-TARS models
+- `holo_run/run_holo.py` for Holo / Holotron / `Hcompany/*` models
+
 See also: `.cursor/skills/dart-rollouter/SKILL.md` (launch services on the GPU VM), `.cursor/skills/eval-osworld/scripts/preflight.sh` (full eval preflight).
 
 ## Troubleshooting
