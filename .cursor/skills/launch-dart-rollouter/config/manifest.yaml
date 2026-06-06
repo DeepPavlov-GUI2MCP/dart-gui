@@ -1,0 +1,72 @@
+# Device + model profile manifest for launch-dart-rollouter.
+# repo_root auto-detects from this file's location when omitted.
+# Override at runtime: DEVICE=... PROFILE=... bash scripts/run_service.sh start
+
+default_device: dart-rollouter
+default_profile: uitars-1.5
+
+devices:
+  # Primary GPU rollouter host (agechnov-agentsearch-0: 2x A100, bundled .venv w/ vLLM 0.19.1)
+  dart-rollouter:
+    session_name: dart-rollouter
+    venv_mode: bundled
+    python: .venv/bin/python
+    requirements: dart_rollouter/requirements_cuda_128_complementary.txt
+    vllm_port: 8010
+    model_port: 15961
+
+  # Example second GPU host — set ssh_host + repo_root and add ~/.ssh/config Host entry.
+  rollouter-gpu2:
+    ssh_host: dart-rollouter-gpu2
+    repo_root: /workspace/dart-gui
+    session_name: dart-rollouter-gpu2
+    venv_mode: complementary
+    python: /usr/bin/python3.12
+    requirements: dart_rollouter/requirements_cuda_128_complementary.txt
+    vllm_port: 8000
+    model_port: 15959
+
+  # Legacy Docker / workspace layout with system-site-packages venv.
+  workspace:
+    repo_root: /workspace/dart-gui
+    session_name: dart-rollouter
+    venv_mode: complementary
+    python: /usr/bin/python3.12
+    requirements: dart_rollouter/requirements_vllm_complementary.txt
+    vllm_port: 8010
+    model_port: 15961
+
+profiles:
+  uitars-1.5:
+    description: UI-TARS-1.5-7B on one GPU
+    hydra_config: config_singleapp
+    ckpt_path: ByteDance-Seed/UI-TARS-1.5-7B
+    replicas: 1
+    vllm:
+      gpu_memory_utilization: 0.92
+      max_model_len: 16384
+
+  holo3-2gpu:
+    description: Holo3-35B-A3B with tensor parallel across two GPUs
+    hydra_config: config_singleapp
+    ckpt_path: Hcompany/Holo3-35B-A3B
+    replicas: 1
+    requirements: dart_rollouter/requirements_cuda_128_complementary.txt
+    vllm:
+      dtype: bfloat16
+      gpu_memory_utilization: 0.90
+      max_model_len: 65536
+      max_num_seqs: 1
+      tensor_parallel_size: 2
+
+  holotron-3-nano:
+    description: Holotron-3-Nano (30B A3B MoE) on one GPU
+    hydra_config: config_singleapp
+    ckpt_path: Hcompany/Holotron-3-Nano
+    replicas: 1
+    requirements: dart_rollouter/requirements_cuda_129_holotron.txt
+    vllm:
+      dtype: bfloat16
+      gpu_memory_utilization: 0.92
+      max_model_len: 16384
+      max_num_seqs: 1
