@@ -6,11 +6,13 @@ SESSION_NAME="${SESSION_NAME:-dart-rollouter-tunnel}"
 SSH_HOST="${SSH_HOST:-dart-rollouter}"
 
 # Remote ports (discover on VM if these change).
-REMOTE_VLLM_PORT="${REMOTE_VLLM_PORT:-8000}"
-REMOTE_MODEL_PORT="${REMOTE_MODEL_PORT:-15959}"
+REMOTE_VLLM_PORT="${REMOTE_VLLM_PORT:-8010}"
+REMOTE_MODEL_PORT="${REMOTE_MODEL_PORT:-15961}"
 
 # Local aliases used by GUI-Docker-Env (.env OPENAI_BASE_URL=http://127.0.0.1:8010).
 LOCAL_VLLM_ALIAS="${LOCAL_VLLM_ALIAS:-8010}"
+LOCAL_VLLM_REPLICA2_ALIAS="${LOCAL_VLLM_REPLICA2_ALIAS:-8011}"
+REMOTE_VLLM_REPLICA2_PORT="${REMOTE_VLLM_REPLICA2_PORT:-8011}"
 LOCAL_MODEL_ALIAS="${LOCAL_MODEL_ALIAS:-15961}"
 
 tunnel_cmd() {
@@ -18,6 +20,7 @@ tunnel_cmd() {
   printf ' -L %s:127.0.0.1:%s' "${REMOTE_VLLM_PORT}" "${REMOTE_VLLM_PORT}"
   printf ' -L %s:127.0.0.1:%s' "${REMOTE_MODEL_PORT}" "${REMOTE_MODEL_PORT}"
   printf ' -L %s:127.0.0.1:%s' "${LOCAL_VLLM_ALIAS}" "${REMOTE_VLLM_PORT}"
+  printf ' -L %s:127.0.0.1:%s' "${LOCAL_VLLM_REPLICA2_ALIAS}" "${REMOTE_VLLM_REPLICA2_PORT}"
   printf ' -L %s:127.0.0.1:%s' "${LOCAL_MODEL_ALIAS}" "${REMOTE_MODEL_PORT}"
   printf ' %s' "${SSH_HOST}"
 }
@@ -39,7 +42,7 @@ discover_remote() {
   ssh -o BatchMode=yes "${SSH_HOST}" bash -s <<'REMOTE'
 set -euo pipefail
 echo "== Listening ports (vLLM / model service) =="
-ss -ltn | grep -E ':(8000|8010|15959|15961)\s' || echo "(none on expected ports)"
+ss -ltn | grep -E ':(8000|8010|8011|15959|15961)\s' || echo "(none on expected ports)"
 echo
 echo "== model_service / vllm processes =="
 pgrep -af 'model_service|vllm serve' || echo "(none)"
@@ -53,11 +56,10 @@ for url in http://127.0.0.1:15959/status http://127.0.0.1:15961/status; do
     break
   fi
 done
-for url in http://127.0.0.1:8000/health http://127.0.0.1:8010/health; do
+for url in http://127.0.0.1:8010/health http://127.0.0.1:8011/health http://127.0.0.1:8000/health; do
   code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 "$url" || true)"
   if [[ "$code" == "200" ]]; then
     echo "OK $url (HTTP $code)"
-    break
   fi
 done
 REMOTE
@@ -104,7 +106,7 @@ show_status() {
   fi
   echo
   echo "Local listeners:"
-  ss -ltn 2>/dev/null | grep -E ":(8000|8010|15959|15961)\s" || echo "  (none)"
+  ss -ltn 2>/dev/null | grep -E ":(8000|8010|8011|15959|15961)\s" || echo "  (none)"
 }
 
 check_health() {
@@ -129,6 +131,18 @@ check_health() {
     exit 1
   fi
   echo "OK (HTTP ${code})"
+
+  if [[ -n "${CHECK_VLLM_REPLICA2:-1}" ]]; then
+    local vllm2_url="http://127.0.0.1:${LOCAL_VLLM_REPLICA2_ALIAS}"
+    echo
+    echo "== vLLM replica2 health: ${vllm2_url}/health =="
+    code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 "${vllm2_url}/health" || true)"
+    if [[ "${code}" != "200" ]]; then
+      echo "FAIL: vLLM replica2 health returned HTTP ${code}" >&2
+      exit 1
+    fi
+    echo "OK (HTTP ${code})"
+  fi
 }
 
 main() {
