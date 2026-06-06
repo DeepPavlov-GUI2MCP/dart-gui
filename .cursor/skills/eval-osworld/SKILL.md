@@ -376,6 +376,6 @@ Quick pass-rate check: use **analyze-rollouts** skill.
 ## Related skills
 
 - **connect-dart-rollouter** — SSH tunnel in tmux `dart-rollouter-tunnel`
-- **dart-rollouter** — start model service on GPU VM
+- **launch-dart-rollouter** — start model service on GPU VM
 - **debug-osworld** — sequential rerun until first client error
 - **analyze-rollouts** — per-task outcome tables from result dirs

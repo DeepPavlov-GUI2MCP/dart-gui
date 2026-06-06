@@ -140,7 +140,7 @@ Use that to choose the matching OSWorld runner:
 - `uitars_run/run_uitars.py` for UI-TARS models
 - `holo_run/run_holo.py` for Holo / Holotron / `Hcompany/*` models
 
-See also: `.cursor/skills/dart-rollouter/SKILL.md` (launch services on the GPU VM), `.cursor/skills/eval-osworld/scripts/preflight.sh` (full eval preflight).
+See also: `.cursor/skills/launch-dart-rollouter/SKILL.md` (launch services on the GPU VM), `.cursor/skills/eval-osworld/scripts/preflight.sh` (full eval preflight).
 
 ## Troubleshooting
 

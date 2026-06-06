@@ -167,7 +167,7 @@ On the GPU VM, vLLM exposes an OpenAI-compatible API on **port 8010** (model poo
 2. In **`GUI-Docker-Env/.env`**: `OPENAI_BASE_URL=http://127.0.0.1:8010`
 3. Check: `curl -s http://127.0.0.1:8010/health`
 
-Details: `.cursor/skills/dart-rollouter/SKILL.md`.
+Details: `.cursor/skills/launch-dart-rollouter/SKILL.md`.
 
 -----
 

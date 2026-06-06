@@ -101,16 +101,27 @@ class ServiceInstance:
     """
     使用一个数据类来统一管理每个服务实例的状态。
     """
-    def __init__(self, port: int, gpu_id: int, process: subprocess.Popen, ckpt_path: str):
+    def __init__(
+        self,
+        port: int,
+        gpu_id: int,
+        process: subprocess.Popen,
+        ckpt_path: str,
+        gpu_ids: Optional[List[int]] = None,
+    ):
         self.port = port
         self.gpu_id = gpu_id
+        self.gpu_ids = gpu_ids if gpu_ids is not None else [gpu_id]
         self.process = process
         self.endpoint = f"http://localhost:{port}"
         self.requests_in_flight = 0
         self.ckpt_path = ckpt_path
 
     def __repr__(self):
-        return f"<ServiceInstance(port={self.port}, gpu_id={self.gpu_id}, pid={self.process.pid})>"
+        return (
+            f"<ServiceInstance(port={self.port}, gpu_ids={self.gpu_ids}, "
+            f"pid={self.process.pid})>"
+        )
 
 
 class GPUInstance:
@@ -198,6 +209,7 @@ class ModelServicePool:
         self.replicas = model_cfg.replicas
         self.vllm_params = model_cfg.vllm_params
         self.gpu_memory_utilization = model_cfg.vllm_params.get("gpu_memory_utilization", 0.9)
+        self.gpus_per_replica = max(1, int(self.vllm_params.get("tensor_parallel_size", 1)))
         
         # 优化后的细粒度锁机制
         self.instances_lock = asyncio.Lock()  # 保护service_instances字典
@@ -221,10 +233,19 @@ class ModelServicePool:
             if gpu_count == 0:
                 raise RuntimeError("No available GPUs found. Cannot start ModelServicePool.")
             
-            self.replicas = min(self.model_cfg.replicas, gpu_count)
+            max_replicas = gpu_count // self.gpus_per_replica
+            if max_replicas == 0:
+                raise RuntimeError(
+                    f"Need at least {self.gpus_per_replica} GPU(s) per replica "
+                    f"(tensor_parallel_size={self.gpus_per_replica}), but only {gpu_count} found."
+                )
+            self.replicas = min(self.model_cfg.replicas, max_replicas)
             if self.replicas < self.model_cfg.replicas:
-                logger.warning(f"Warning: Requested replicas ({self.model_cfg.replicas}) > available GPU count ({gpu_count}). "
-                      f"Setting replicas to {self.replicas}.")
+                logger.warning(
+                    f"Warning: Requested replicas ({self.model_cfg.replicas}) > "
+                    f"max supported ({max_replicas}) with {self.gpus_per_replica} GPU(s) each. "
+                    f"Setting replicas to {self.replicas}."
+                )
             
             await self._init_gpu_instances()
             logger.info(await self.get_gpu_info())
@@ -266,6 +287,17 @@ class ModelServicePool:
         for gpu_id in range(gpu_count):
             self.gpu_instances[gpu_id] = GPUInstance(gpu_id, self.gpu_memory_utilization)
 
+    def _pick_gpu_groups(self, replica_count: int, available_gpus: List[int]) -> List[List[int]]:
+        """Allocate consecutive GPU groups for tensor-parallel replicas."""
+        groups: List[List[int]] = []
+        remaining = list(available_gpus)
+        for _ in range(replica_count):
+            if len(remaining) < self.gpus_per_replica:
+                break
+            groups.append(remaining[: self.gpus_per_replica])
+            remaining = remaining[self.gpus_per_replica :]
+        return groups
+
     async def _start_initial_services(self) -> List[ServiceInstance]:
         """启动初始的 `replicas` 数量的服务实例。"""
         logger.info(f"Starting {self.replicas} initial model services...")
@@ -281,21 +313,24 @@ class ModelServicePool:
             logger.warning("No available GPUs to start initial services.")
             return []
 
-        gpus_to_use = available_gpus[:min(self.replicas, len(available_gpus))]
+        gpu_groups = self._pick_gpu_groups(self.replicas, available_gpus)
         
         # 异步检查端口可用性
-        ports_to_use = await self._find_available_ports(len(gpus_to_use))
+        ports_to_use = await self._find_available_ports(len(gpu_groups))
         
-        if len(ports_to_use) < len(gpus_to_use):
-            logger.warning(f"Warning: Only found {len(ports_to_use)} available ports for {len(gpus_to_use)} GPUs")
-            gpus_to_use = gpus_to_use[:len(ports_to_use)]
+        if len(ports_to_use) < len(gpu_groups):
+            logger.warning(
+                f"Warning: Only found {len(ports_to_use)} available ports "
+                f"for {len(gpu_groups)} replica(s)"
+            )
+            gpu_groups = gpu_groups[: len(ports_to_use)]
         
-        logger.info(f"Using GPUs: {gpus_to_use}, Ports: {ports_to_use}")
+        logger.info(f"Using GPU groups: {gpu_groups}, Ports: {ports_to_use}")
         
         # 启动服务实例（不持有锁）
         tasks = [
-            self._add_new_service_instance(port, gpu_id, self.default_ckpt_path) 
-            for port, gpu_id in zip(ports_to_use, gpus_to_use)
+            self._add_new_service_instance(port, gpu_ids, self.default_ckpt_path) 
+            for port, gpu_ids in zip(ports_to_use, gpu_groups)
         ]
         instances = await asyncio.gather(*tasks)
         
@@ -308,31 +343,40 @@ class ModelServicePool:
             return None
         
         port_to_use = ports[0]
-        instance = await self._add_new_service_instance(port_to_use, gpu_id, self.default_ckpt_path)
+        gpu_ids = list(range(gpu_id, gpu_id + self.gpus_per_replica))
+        instance = await self._add_new_service_instance(port_to_use, gpu_ids, self.default_ckpt_path)
 
         if not await self.wait_for_model_pool_ready([instance]):
             return None
         return instance
 
-    async def _add_new_service_instance(self, port: int, gpu_id: int, ckpt_path: str) -> ServiceInstance:
+    async def _add_new_service_instance(
+        self, port: int, gpu_ids: List[int], ckpt_path: str
+    ) -> ServiceInstance:
         """启动一个新的服务实例并将其添加到池中。"""
-        logger.info(f"Attempting to start service on port {port} with GPU {gpu_id} from ckpt_path {ckpt_path}...")
+        primary_gpu = gpu_ids[0]
+        logger.info(
+            f"Attempting to start service on port {port} with GPUs {gpu_ids} "
+            f"from ckpt_path {ckpt_path}..."
+        )
         
         # 标记GPU为不可用
         async with self.gpu_lock:
-            if gpu_id in self.gpu_instances:
-                self.gpu_instances[gpu_id].is_available = False
+            for gpu_id in gpu_ids:
+                if gpu_id in self.gpu_instances:
+                    self.gpu_instances[gpu_id].is_available = False
         
-        proc = self._launch_vllm_process(port, gpu_id, ckpt_path)
+        proc = self._launch_vllm_process(port, gpu_ids, ckpt_path)
         if not proc:
             logger.error(f"Failed to launch process on port {port}.")
             # 恢复GPU可用状态
             async with self.gpu_lock:
-                if gpu_id in self.gpu_instances:
-                    self.gpu_instances[gpu_id].is_available = True
-            raise RuntimeError(f"Failed to launch vLLM process on GPU {gpu_id}")
+                for gpu_id in gpu_ids:
+                    if gpu_id in self.gpu_instances:
+                        self.gpu_instances[gpu_id].is_available = True
+            raise RuntimeError(f"Failed to launch vLLM process on GPUs {gpu_ids}")
         
-        instance = ServiceInstance(port, gpu_id, proc, ckpt_path)
+        instance = ServiceInstance(port, primary_gpu, proc, ckpt_path, gpu_ids=gpu_ids)
         logger.info(f"Successfully started service instance: {instance}")
         
         # 启动日志监控
@@ -340,10 +384,12 @@ class ModelServicePool:
 
         return instance
 
-    def _launch_vllm_process(self, port: int, gpu_id: int, ckpt_path: str) -> Optional[subprocess.Popen]:
+    def _launch_vllm_process(
+        self, port: int, gpu_ids: List[int], ckpt_path: str
+    ) -> Optional[subprocess.Popen]:
         """启动 vLLM 子进程。"""
         env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu_id) for gpu_id in gpu_ids)
         
         vllm_command = [
             "vllm", "serve", ckpt_path,
@@ -418,11 +464,14 @@ class ModelServicePool:
         
         # 释放GPU资源
         async with self.gpu_lock:
-            if gpu_id in self.gpu_instances:
-                self.gpu_instances[gpu_id].is_available = True
-                logger.info(f"GPU {gpu_id} has been marked as available again")
+            for gpu_id in instance.gpu_ids:
+                if gpu_id in self.gpu_instances:
+                    self.gpu_instances[gpu_id].is_available = True
+                    logger.info(f"GPU {gpu_id} has been marked as available again")
         
-        logger.info(f"Service on GPU {gpu_id} has been completely removed and GPU released")
+        logger.info(
+            f"Service on GPUs {instance.gpu_ids} has been completely removed and GPUs released"
+        )
 
     async def _shutdown_all_services(self):
         """关闭所有正在运行的服务实例。"""
@@ -469,28 +518,31 @@ class ModelServicePool:
             logger.warning("Warning: No available GPUs to start new services.")
             return []
 
-        gpus_to_use = available_gpus[:min(count, len(available_gpus))]
-        logger.info(f">>>>>>> gpu to run {gpus_to_use}")
+        gpu_groups = self._pick_gpu_groups(count, available_gpus)
+        logger.info(f">>>>>>> gpu groups to run {gpu_groups}")
         
-        if len(gpus_to_use) < count:
-            logger.warning(f"Warning: Not enough free GPUs. Will start {len(gpus_to_use)} instead of {count}.")
+        if len(gpu_groups) < count:
+            logger.warning(
+                f"Warning: Not enough free GPUs. Will start {len(gpu_groups)} "
+                f"instead of {count}."
+            )
 
         # 异步检查端口可用性（不持有锁）
-        ports_to_use = await self._find_available_ports(len(gpus_to_use))
+        ports_to_use = await self._find_available_ports(len(gpu_groups))
         
-        if len(ports_to_use) < len(gpus_to_use):
+        if len(ports_to_use) < len(gpu_groups):
             logger.warning(f"Warning: Not enough free ports. Starting {len(ports_to_use)} services.")
-            gpus_to_use = gpus_to_use[:len(ports_to_use)]
+            gpu_groups = gpu_groups[: len(ports_to_use)]
 
-        if not gpus_to_use:
+        if not gpu_groups:
             return []
 
-        logger.info(f"Starting services on GPUs: {gpus_to_use}, Ports: {ports_to_use}")
+        logger.info(f"Starting services on GPU groups: {gpu_groups}, Ports: {ports_to_use}")
         
         # 启动服务实例（不持有锁）
         tasks = [
-            self._add_new_service_instance(port, gpu_id, self.default_ckpt_path) 
-            for port, gpu_id in zip(ports_to_use, gpus_to_use)
+            self._add_new_service_instance(port, gpu_ids, self.default_ckpt_path) 
+            for port, gpu_ids in zip(ports_to_use, gpu_groups)
         ]
         instances = await asyncio.gather(*tasks)
         
@@ -545,18 +597,19 @@ class ModelServicePool:
             logger.warning("Warning: Cannot restore replicas, no free GPUs available.")
             return
 
-        num_to_start = min(len(ports_to_create), len(available_gpus), needed)
+        num_to_start = min(len(ports_to_create), len(available_gpus) // self.gpus_per_replica, needed)
         
         if num_to_start > 0:
             logger.info(f"Found resources to start {num_to_start} new instance(s).")
+            gpu_groups = self._pick_gpu_groups(num_to_start, available_gpus)
             
             # 启动实例（不持有锁）
             tasks = [
                 self._add_new_service_instance(
                     ports_to_create[i], 
-                    available_gpus[i], 
+                    gpu_groups[i], 
                     self.default_ckpt_path
-                ) for i in range(num_to_start)
+                ) for i in range(len(gpu_groups))
             ]
             instances = await asyncio.gather(*tasks)
             
