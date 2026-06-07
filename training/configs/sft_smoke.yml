@@ -1,0 +1,44 @@
+train_sft:
+  model:
+    base_model: ByteDance-Seed/UI-TARS-1.5-7B
+    max_seq_length: 2048
+    load_in_4bit: true
+    trust_remote_code: true
+
+  dataset:
+    repo_id: mlabonne/FineTome-100k
+    split: train[:8]
+    field_messages: conversations
+    message_property_mappings:
+      role: from
+      content: value
+
+  hub:
+    push_to_hub: false
+
+  output:
+    output_dir: outputs/sft/ui-tars-smoke
+    datasets_dir: datasets/runtime
+
+  training:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 2
+    max_steps: 5
+    learning_rate: 0.0002
+    warmup_steps: 1
+    logging_steps: 1
+    save_steps: 5
+    packing: false
+    gradient_checkpointing: true
+    bf16: true
+
+  lora:
+    r: 16
+    alpha: 32
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - down_proj
+      - up_proj

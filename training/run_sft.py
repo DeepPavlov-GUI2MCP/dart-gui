@@ -380,6 +380,9 @@ def build_sft_config(config: ResolvedConfig) -> Any:
     from trl import SFTConfig
 
     use_bf16 = config.training.bf16 and torch.cuda.is_available()
+    packing = config.training.packing
+    if is_vision_model(config.model.base_model, config.model.trust_remote_code):
+        packing = False
     kwargs: dict[str, Any] = {
         "output_dir": str(config.output_dir),
         "per_device_train_batch_size": config.training.per_device_train_batch_size,
@@ -389,8 +392,8 @@ def build_sft_config(config: ResolvedConfig) -> Any:
         "logging_steps": config.training.logging_steps,
         "save_steps": config.training.save_steps,
         "weight_decay": config.training.weight_decay,
-        "max_seq_length": config.model.max_seq_length,
-        "packing": config.training.packing,
+        "max_length": config.model.max_seq_length,
+        "packing": packing,
         "bf16": use_bf16,
         "gradient_checkpointing": config.training.gradient_checkpointing,
         "report_to": "none",
