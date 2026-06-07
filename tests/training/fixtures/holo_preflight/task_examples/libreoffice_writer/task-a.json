@@ -1,0 +1,36 @@
+{
+  "id": "task-a",
+  "snapshot": "libreoffice_writer",
+  "instruction": "Task A microaction.",
+  "config": [
+    {
+      "type": "a11y_preflight",
+      "parameters": {
+        "steps": [
+          {
+            "op": "wait_for",
+            "selector": {
+              "role": "frame",
+              "name_contains": "LibreOffice Writer"
+            }
+          },
+          {
+            "op": "click",
+            "selector": {
+              "role": "menu",
+              "name": "Table"
+            },
+            "meta": {
+              "role": "menu",
+              "name": "Table",
+              "recorded_bbox": [10, 20, 40, 20]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "synthetic": {
+    "macro_state_id": "test-macro-001"
+  }
+}
