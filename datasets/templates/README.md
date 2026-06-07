@@ -12,6 +12,14 @@ Point `train_sft.dataset.format: uitars_trace` at those rollout roots and set `t
 
 See `training/configs/sft_example.yml` and `.cursor/skills/train-sft/SKILL.md`.
 
+## Holo trace SFT
+
+Holo eval rollouts under `GUI-Docker-Env/results_holo_gpt54_writer_traces_*` include preflight artifact rows plus agent steps with Holo Step JSON in `response`.
+
+Set `trace_source: holo` (or `auto`) and use `training/configs/sft_holo_example.yml`. The builder converts Holo JSON to UI-TARS labels and maps pre-action screenshots across preflight and post-action agent rows.
+
+Trace-collection runs often have `result.txt: -1`; leave `min_result` unset until eval scores are populated.
+
 ## Legacy chat JSONL
 
 `sft_messages.jsonl` uses OpenAI-style `messages` records for TRL chat SFT.

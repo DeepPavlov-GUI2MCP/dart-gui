@@ -92,12 +92,17 @@ def load_trace_scan_settings(config_path: str) -> tuple[TraceScanSettings, Path,
         min_pixels=get_optional_int(uitars_cfg, "min_pixels", 100 * 28 * 28),
         history_n=history_n,
     )
+    trace_source = get_optional_str(dataset_cfg, "trace_source", "auto") or "auto"
+    if trace_source not in {"auto", "uitars", "holo"}:
+        raise ValueError("`dataset.trace_source` must be one of: auto, uitars, holo.")
+
     settings = TraceScanSettings(
         trace_roots=trace_roots,
         task_examples_dir=task_examples_dir,
         sample_mode=get_optional_str(dataset_cfg, "sample_mode", "per_step") or "per_step",
         history_n=history_n,
         min_result=get_optional_float(dataset_cfg, "min_result"),
+        trace_source=trace_source,  # type: ignore[arg-type]
         uitars=uitars,
     )
     datasets_dir = repo_path(get_optional_str(output_cfg, "datasets_dir", "datasets/runtime") or "datasets/runtime")
@@ -113,6 +118,7 @@ def cache_name(settings: TraceScanSettings) -> str:
             "sample_mode": settings.sample_mode,
             "history_n": settings.history_n,
             "min_result": settings.min_result,
+            "trace_source": settings.trace_source,
             "uitars": {
                 "prompt_style": settings.uitars.prompt_style,
                 "infer_mode": settings.uitars.infer_mode,

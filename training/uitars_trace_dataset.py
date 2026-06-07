@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Sequence
+from typing import Any, Iterator, Literal, Sequence
 
+from holo_to_uitars import convert_holo_response, parse_holo_response
 from uitars_format import UitarsFormatSettings, build_messages_from_images_and_responses
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TraceSource = Literal["auto", "uitars", "holo"]
 
 
 @dataclass(frozen=True)
@@ -19,12 +21,21 @@ class TraceStep:
 
 
 @dataclass(frozen=True)
+class TrajRow:
+    step_num: int
+    screenshot_file: str
+    response: str | None
+    action: Any
+
+
+@dataclass(frozen=True)
 class TraceScanSettings:
     trace_roots: tuple[str, ...]
     task_examples_dir: str
     sample_mode: str = "per_step"
     history_n: int = 5
     min_result: float | None = None
+    trace_source: TraceSource = "auto"
     uitars: UitarsFormatSettings = UitarsFormatSettings()
 
 
@@ -35,39 +46,105 @@ def repo_path(value: str) -> Path:
     return path.resolve()
 
 
-def load_traj_steps(rollout_dir: Path) -> list[TraceStep]:
+def load_traj_rows(rollout_dir: Path) -> list[TrajRow]:
     traj_path = rollout_dir / "traj.jsonl"
     if not traj_path.is_file():
         return []
-    steps: list[TraceStep] = []
+    rows: list[TrajRow] = []
     with open(traj_path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             payload = json.loads(line)
-            response = payload.get("response")
-            screenshot_file = payload.get("screenshot_file")
             step_num = payload.get("step_num")
-            if not isinstance(response, str) or not response.strip():
+            screenshot_file = payload.get("screenshot_file")
+            if not isinstance(step_num, int):
                 continue
             if not isinstance(screenshot_file, str) or not screenshot_file.strip():
                 continue
-            if not isinstance(step_num, int):
+            response = payload.get("response")
+            if response is not None and not isinstance(response, str):
                 continue
-            steps.append(
-                TraceStep(
+            rows.append(
+                TrajRow(
                     step_num=step_num,
-                    response=response.strip(),
                     screenshot_file=screenshot_file.strip(),
+                    response=response.strip() if isinstance(response, str) and response.strip() else None,
+                    action=payload.get("action"),
                 )
             )
-    steps.sort(key=lambda step: step.step_num)
+    rows.sort(key=lambda row: row.step_num)
+    return rows
+
+
+def is_preflight_row(row: TrajRow) -> bool:
+    action = row.action
+    return isinstance(action, dict) and action.get("phase") == "a11y_preflight"
+
+
+def is_holo_agent_row(row: TrajRow) -> bool:
+    if not row.response or is_preflight_row(row):
+        return False
+    try:
+        parse_holo_response(row.response)
+    except Exception:
+        return False
+    return True
+
+
+def detect_rollout_trace_source(rows: list[TrajRow], configured: TraceSource) -> str:
+    if configured in {"uitars", "holo"}:
+        return configured
+    if any(is_preflight_row(row) for row in rows):
+        return "holo"
+    for row in rows:
+        if row.response and is_holo_agent_row(row):
+            return "holo"
+    return "uitars"
+
+
+def holo_agent_row_indices(rows: list[TrajRow]) -> list[int]:
+    return [idx for idx, row in enumerate(rows) if is_holo_agent_row(row)]
+
+
+def load_traj_steps(rollout_dir: Path) -> list[TraceStep]:
+    steps: list[TraceStep] = []
+    for row in load_traj_rows(rollout_dir):
+        if not row.response:
+            continue
+        steps.append(
+            TraceStep(
+                step_num=row.step_num,
+                response=row.response,
+                screenshot_file=row.screenshot_file,
+            )
+        )
     return steps
 
 
 def observation_paths_for_steps(rollout_dir: Path, steps: list[TraceStep]) -> list[Path]:
     return [rollout_dir / step.screenshot_file for step in steps]
+
+
+def holo_observation_paths(
+    rollout_dir: Path,
+    rows: list[TrajRow],
+    agent_indices: list[int],
+    agent_step_idx: int,
+) -> list[Path]:
+    first_agent_idx = agent_indices[0]
+    paths: list[Path] = []
+    for offset in range(agent_step_idx + 1):
+        row_idx = first_agent_idx - 1 + offset
+        if row_idx < 0:
+            raise ValueError("Holo trace is missing a pre-action screenshot before the first agent step.")
+        paths.append(rollout_dir / rows[row_idx].screenshot_file)
+    return paths
+
+
+def holo_converted_responses(rows: list[TrajRow], agent_indices: list[int]) -> list[str]:
+    return [convert_holo_response(rows[idx].response or "") for idx in agent_indices]
 
 
 def read_result_score(rollout_dir: Path) -> float | None:
@@ -117,7 +194,18 @@ def iter_rollout_dirs(trace_roots: Sequence[str]) -> Iterator[Path]:
             yield rollout_dir
 
 
-def build_per_step_rows(
+def _format_settings(settings: TraceScanSettings) -> UitarsFormatSettings:
+    return UitarsFormatSettings(
+        prompt_style=settings.uitars.prompt_style,
+        infer_mode=settings.uitars.infer_mode,
+        language=settings.uitars.language,
+        max_pixels=settings.uitars.max_pixels,
+        min_pixels=settings.uitars.min_pixels,
+        history_n=settings.history_n,
+    )
+
+
+def build_uitars_per_step_rows(
     rollout_dir: Path,
     instruction: str,
     settings: TraceScanSettings,
@@ -126,14 +214,7 @@ def build_per_step_rows(
     if not steps:
         return []
     obs_paths = observation_paths_for_steps(rollout_dir, steps)
-    format_settings = UitarsFormatSettings(
-        prompt_style=settings.uitars.prompt_style,
-        infer_mode=settings.uitars.infer_mode,
-        language=settings.uitars.language,
-        max_pixels=settings.uitars.max_pixels,
-        min_pixels=settings.uitars.min_pixels,
-        history_n=settings.history_n,
-    )
+    format_settings = _format_settings(settings)
     rows: list[dict[str, Any]] = []
     for step_idx, step in enumerate(steps):
         image_paths = obs_paths[: step_idx + 1]
@@ -162,7 +243,45 @@ def build_per_step_rows(
     return rows
 
 
-def build_full_trajectory_row(
+def build_holo_per_step_rows(
+    rollout_dir: Path,
+    instruction: str,
+    settings: TraceScanSettings,
+    rows: list[TrajRow],
+) -> list[dict[str, Any]]:
+    agent_indices = holo_agent_row_indices(rows)
+    if not agent_indices:
+        return []
+    converted = holo_converted_responses(rows, agent_indices)
+    format_settings = _format_settings(settings)
+    built: list[dict[str, Any]] = []
+    for agent_step_idx, traj_idx in enumerate(agent_indices):
+        image_paths = holo_observation_paths(rollout_dir, rows, agent_indices, agent_step_idx)
+        if not all(path.is_file() for path in image_paths):
+            continue
+        messages = build_messages_from_images_and_responses(
+            instruction,
+            image_paths,
+            converted[:agent_step_idx],
+            format_settings,
+            target_response=converted[agent_step_idx],
+            stage_relative_paths=True,
+            rollout_dir=rollout_dir,
+        )
+        built.append(
+            {
+                "messages": messages,
+                "task_id": infer_domain_and_task_id(rollout_dir)[1],
+                "rollout_dir": str(rollout_dir),
+                "step_num": rows[traj_idx].step_num,
+                "sample_mode": "per_step",
+                "loss_on_last_assistant_only": True,
+            }
+        )
+    return built
+
+
+def build_uitars_full_trajectory_row(
     rollout_dir: Path,
     instruction: str,
     settings: TraceScanSettings,
@@ -171,20 +290,12 @@ def build_full_trajectory_row(
     if not steps:
         return None
     obs_paths = observation_paths_for_steps(rollout_dir, steps)
-    image_paths = obs_paths
-    if not all(path.is_file() for path in image_paths):
+    if not all(path.is_file() for path in obs_paths):
         return None
-    format_settings = UitarsFormatSettings(
-        prompt_style=settings.uitars.prompt_style,
-        infer_mode=settings.uitars.infer_mode,
-        language=settings.uitars.language,
-        max_pixels=settings.uitars.max_pixels,
-        min_pixels=settings.uitars.min_pixels,
-        history_n=settings.history_n,
-    )
+    format_settings = _format_settings(settings)
     messages = build_messages_from_images_and_responses(
         instruction,
-        image_paths,
+        obs_paths,
         [step.response for step in steps[:-1]],
         format_settings,
         target_response=steps[-1].response,
@@ -201,6 +312,39 @@ def build_full_trajectory_row(
     }
 
 
+def build_holo_full_trajectory_row(
+    rollout_dir: Path,
+    instruction: str,
+    settings: TraceScanSettings,
+    rows: list[TrajRow],
+) -> dict[str, Any] | None:
+    agent_indices = holo_agent_row_indices(rows)
+    if not agent_indices:
+        return None
+    converted = holo_converted_responses(rows, agent_indices)
+    image_paths = holo_observation_paths(rollout_dir, rows, agent_indices, len(agent_indices) - 1)
+    if not all(path.is_file() for path in image_paths):
+        return None
+    format_settings = _format_settings(settings)
+    messages = build_messages_from_images_and_responses(
+        instruction,
+        image_paths,
+        converted[:-1],
+        format_settings,
+        target_response=converted[-1],
+        stage_relative_paths=True,
+        rollout_dir=rollout_dir,
+    )
+    return {
+        "messages": messages,
+        "task_id": infer_domain_and_task_id(rollout_dir)[1],
+        "rollout_dir": str(rollout_dir),
+        "step_num": rows[agent_indices[-1]].step_num,
+        "sample_mode": "full_trajectory",
+        "loss_on_last_assistant_only": False,
+    }
+
+
 def build_rows_for_rollout(rollout_dir: Path, settings: TraceScanSettings) -> list[dict[str, Any]]:
     if settings.min_result is not None:
         score = read_result_score(rollout_dir)
@@ -208,11 +352,18 @@ def build_rows_for_rollout(rollout_dir: Path, settings: TraceScanSettings) -> li
             return []
     domain, task_id = infer_domain_and_task_id(rollout_dir)
     instruction = load_task_instruction(repo_path(settings.task_examples_dir), domain, task_id)
+    traj_rows = load_traj_rows(rollout_dir)
+    source = detect_rollout_trace_source(traj_rows, settings.trace_source)
     if settings.sample_mode == "full_trajectory":
-        row = build_full_trajectory_row(rollout_dir, instruction, settings)
+        if source == "holo":
+            row = build_holo_full_trajectory_row(rollout_dir, instruction, settings, traj_rows)
+        else:
+            row = build_uitars_full_trajectory_row(rollout_dir, instruction, settings)
         return [row] if row is not None else []
     if settings.sample_mode == "per_step":
-        return build_per_step_rows(rollout_dir, instruction, settings)
+        if source == "holo":
+            return build_holo_per_step_rows(rollout_dir, instruction, settings, traj_rows)
+        return build_uitars_per_step_rows(rollout_dir, instruction, settings)
     raise ValueError(f"Unsupported sample_mode: {settings.sample_mode}")
 
 

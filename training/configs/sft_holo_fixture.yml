@@ -1,0 +1,53 @@
+train_sft:
+  model:
+    base_model: ByteDance-Seed/UI-TARS-1.5-7B
+    max_seq_length: 2048
+    trust_remote_code: true
+
+  dataset:
+    format: uitars_trace
+    trace_source: holo
+    trace_roots:
+      - tests/training/fixtures/holo_trace/rollout
+    task_examples_dir: tests/training/fixtures/holo_trace/task_examples
+    sample_mode: per_step
+    history_n: 5
+    uitars:
+      prompt_style: qwen25vl_normal
+      infer_mode: qwen25vl_normal
+      language: English
+      max_pixels: 12845056
+      min_pixels: 78400
+
+  hf:
+    api_key: ${HUGGINGFACE_API_KEY}
+
+  hub:
+    push_to_hub: false
+
+  output:
+    output_dir: outputs/sft/ui-tars-holo-fixture
+    datasets_dir: datasets/runtime
+
+  training:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 2
+    max_steps: 5
+    learning_rate: 0.0002
+    warmup_steps: 1
+    logging_steps: 1
+    save_steps: 5
+    packing: false
+    gradient_checkpointing: true
+    fp16: true
+
+  lora:
+    r: 16
+    alpha: 32
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - down_proj
+      - up_proj

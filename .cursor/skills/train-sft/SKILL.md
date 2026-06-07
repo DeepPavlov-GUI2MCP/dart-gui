@@ -50,6 +50,34 @@ Use `sample_mode: full_trajectory` to emit one row per rollout and train all ass
 
 Each `traj.jsonl` row's `screenshot_file` is the pre-action observation for that step; step 1's screenshot is the initial desktop state.
 
+Set `trace_source: uitars` to force native UI-TARS traces. Default is `auto`.
+
+### Holo writer traces
+
+Holo rollouts (for example `GUI-Docker-Env/results_holo_gpt54_writer_traces_*`) use a different artifact timeline:
+
+- Step 1: initial screenshot (`response: null`)
+- Preflight rows: a11y setup steps (`response: null`, not trained)
+- Agent rows: Holo Step JSON in `response`, screenshot captured **after** the action
+
+Use:
+
+```yaml
+dataset:
+  format: uitars_trace
+  trace_source: holo          # or auto (detects preflight rows / Holo JSON)
+  trace_roots:
+    - GUI-Docker-Env/results_holo_gpt54_writer_traces_20260607_031517/pyautogui/screenshot/Hcompany/Holotron-3-Nano
+  task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
+  sample_mode: per_step
+```
+
+Holo JSON responses are converted to UI-TARS `Thought:` / `Action:` labels (`fail` → `call_user()`). Preflight screenshots are used only to locate the first agent pre-action frame.
+
+Omit `min_result` for trace-collection runs where `result.txt` is still `-1`.
+
+Example config: `training/configs/sft_holo_example.yml`.
+
 ### Legacy chat JSONL
 
 Set `train_sft.dataset.format: chat` (default when omitted) and provide a Hugging Face dataset repo with OpenAI-style `messages`:

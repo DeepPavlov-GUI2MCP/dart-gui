@@ -12,9 +12,14 @@ RUN_SFT = REPO_ROOT / "training" / "run_sft.py"
 SFT_CONFIG = REPO_ROOT / "training" / "configs" / "sft_example.yml"
 SFT_CHAT_CONFIG = REPO_ROOT / "training" / "configs" / "sft_example_chat.yml"
 SFT_FIXTURE_CONFIG = REPO_ROOT / "training" / "configs" / "sft_fixture.yml"
+SFT_HOLO_FIXTURE_CONFIG = REPO_ROOT / "training" / "configs" / "sft_holo_fixture.yml"
 FIXTURE_ROLLOUT = (
     REPO_ROOT
     / "tests/training/fixtures/uitars_trace/rollout/libreoffice_writer/test-task-id"
+)
+HOLO_FIXTURE_ROLLOUT = (
+    REPO_ROOT
+    / "tests/training/fixtures/holo_trace/rollout/libreoffice_writer/test-task-id"
 )
 
 
@@ -79,6 +84,7 @@ def test_build_per_step_rows_from_fixture():
         task_examples_dir=str(REPO_ROOT / "tests/training/fixtures/uitars_trace/task_examples"),
         sample_mode="per_step",
         history_n=5,
+        trace_source="uitars",
         uitars=uitars_format.UitarsFormatSettings(),
     )
     rows = uitars_trace_dataset.build_rows_for_rollout(FIXTURE_ROLLOUT, settings)
@@ -91,6 +97,46 @@ def test_build_per_step_rows_from_fixture():
         assert roles.count("assistant") >= 1
         assert roles[-1] == "assistant"
         assert row["loss_on_last_assistant_only"] is True
+
+
+def test_holo_to_uitars_converter():
+    holo_to_uitars = import_training_module("holo_to_uitars")
+    click = holo_to_uitars.convert_holo_response(
+        '{"thought":"Open menu","tool_call":{"tool_name":"click","element":"Help","x":100,"y":200,"button":"left"}}'
+    )
+    assert click == "Thought: Open menu\nAction: click(start_box='(100,200)')"
+
+    write = holo_to_uitars.convert_holo_response(
+        '{"thought":"Type text","tool_call":{"tool_name":"write","content":"hello","press_enter":false,"overwrite":false}}'
+    )
+    assert write == "Thought: Type text\nAction: type(content='hello')"
+
+    answer = holo_to_uitars.convert_holo_response(
+        '{"thought":"Done","tool_call":{"tool_name":"answer","content":"done"}}'
+    )
+    assert answer == "Thought: Done\nAction: finished(content='done')"
+
+    fail = holo_to_uitars.convert_holo_response(
+        '{"thought":"Blocked","tool_call":{"tool_name":"fail","reason":"cannot continue"}}'
+    )
+    assert fail == "Thought: Blocked\nAction: call_user()"
+
+
+def test_build_holo_per_step_rows_use_prior_screenshot():
+    uitars_trace_dataset = import_training_module("uitars_trace_dataset")
+    uitars_format = import_training_module("uitars_format")
+    settings = uitars_trace_dataset.TraceScanSettings(
+        trace_roots=(str(REPO_ROOT / "tests/training/fixtures/holo_trace/rollout"),),
+        task_examples_dir=str(REPO_ROOT / "tests/training/fixtures/holo_trace/task_examples"),
+        sample_mode="per_step",
+        trace_source="holo",
+        uitars=uitars_format.UitarsFormatSettings(),
+    )
+    rows = uitars_trace_dataset.build_rows_for_rollout(HOLO_FIXTURE_ROLLOUT, settings)
+    assert len(rows) == 2
+    first_image = rows[0]["messages"][2]["content"][0]["path"]
+    assert first_image == "step_3_20250101@120002.png"
+    assert rows[0]["step_num"] == 4
 
 
 def test_collator_masks_labels_outside_last_assistant():
@@ -154,3 +200,22 @@ def test_dry_run_subprocess_example_config():
     )
     assert result.returncode == 0, result.stderr
     assert "Dataset format: uitars_trace" in result.stdout
+
+
+def test_dry_run_subprocess_holo_fixture():
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(RUN_SFT),
+            "--config",
+            str(SFT_HOLO_FIXTURE_CONFIG),
+            "--dry-run",
+            "--skip-hf-validation",
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Staged dataset:" in result.stdout

@@ -57,6 +57,7 @@ class DatasetSettings:
     sample_mode: str = "per_step"
     history_n: int = 5
     min_result: float | None = None
+    trace_source: str = "auto"
     uitars: UitarsFormatSettings = field(default_factory=UitarsFormatSettings)
 
 
@@ -227,6 +228,10 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
             raise ValueError("`dataset.min_result` must be a number.")
         min_result = float(min_result_raw)
 
+    trace_source = get_optional_str(dataset_cfg, "trace_source", "auto") or "auto"
+    if trace_source not in {"auto", "uitars", "holo"}:
+        raise ValueError("`dataset.trace_source` must be one of: auto, uitars, holo.")
+
     repo_id = get_optional_str(dataset_cfg, "repo_id")
     if dataset_format == "chat":
         if not repo_id:
@@ -258,6 +263,7 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         sample_mode=get_optional_str(dataset_cfg, "sample_mode", "per_step") or "per_step",
         history_n=history_n,
         min_result=min_result,
+        trace_source=trace_source,
         uitars=uitars,
     )
 
@@ -360,6 +366,7 @@ def stage_dataset(config: ResolvedConfig, *, dry_run: bool = False) -> Path:
             sample_mode=config.dataset.sample_mode,
             history_n=config.dataset.history_n,
             min_result=config.dataset.min_result,
+            trace_source=config.dataset.trace_source,  # type: ignore[arg-type]
             uitars=config.dataset.uitars,
         )
         data_path = config.datasets_dir / uitars_cache_name(scan_settings) / "data.jsonl"
@@ -592,6 +599,7 @@ def dataset_cache_name(dataset: DatasetSettings) -> str:
             sample_mode=dataset.sample_mode,
             history_n=dataset.history_n,
             min_result=dataset.min_result,
+            trace_source=dataset.trace_source,  # type: ignore[arg-type]
             uitars=dataset.uitars,
         )
         return uitars_cache_name(scan_settings)
