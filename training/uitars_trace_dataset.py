@@ -35,14 +35,6 @@ def repo_path(value: str) -> Path:
     return path.resolve()
 
 
-def find_initial_screenshot(rollout_dir: Path) -> Path | None:
-    for pattern in ("initial.png", "initial_screenshot.png", "step_0*.png"):
-        matches = sorted(rollout_dir.glob(pattern))
-        if matches:
-            return matches[0]
-    return None
-
-
 def load_traj_steps(rollout_dir: Path) -> list[TraceStep]:
     traj_path = rollout_dir / "traj.jsonl"
     if not traj_path.is_file():
@@ -74,13 +66,8 @@ def load_traj_steps(rollout_dir: Path) -> list[TraceStep]:
     return steps
 
 
-def observation_paths_for_steps(rollout_dir: Path, steps: list[TraceStep]) -> list[Path | None]:
-    if not steps:
-        return []
-    paths: list[Path | None] = [find_initial_screenshot(rollout_dir)]
-    for step in steps[:-1]:
-        paths.append(rollout_dir / step.screenshot_file)
-    return paths
+def observation_paths_for_steps(rollout_dir: Path, steps: list[TraceStep]) -> list[Path]:
+    return [rollout_dir / step.screenshot_file for step in steps]
 
 
 def read_result_score(rollout_dir: Path) -> float | None:
@@ -149,8 +136,8 @@ def build_per_step_rows(
     )
     rows: list[dict[str, Any]] = []
     for step_idx, step in enumerate(steps):
-        image_paths = [path for path in obs_paths[: step_idx + 1] if path is not None]
-        if len(image_paths) != step_idx + 1:
+        image_paths = obs_paths[: step_idx + 1]
+        if not all(path.is_file() for path in image_paths):
             continue
         history_responses = [item.response for item in steps[:step_idx]]
         messages = build_messages_from_images_and_responses(
@@ -184,8 +171,8 @@ def build_full_trajectory_row(
     if not steps:
         return None
     obs_paths = observation_paths_for_steps(rollout_dir, steps)
-    image_paths = [path for path in obs_paths if path is not None]
-    if len(image_paths) != len(steps):
+    image_paths = obs_paths
+    if not all(path.is_file() for path in image_paths):
         return None
     format_settings = UitarsFormatSettings(
         prompt_style=settings.uitars.prompt_style,

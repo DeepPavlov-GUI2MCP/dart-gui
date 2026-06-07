@@ -5,7 +5,7 @@
 Writer/eval rollouts under `GUI-Docker-Env/results_uitars15_writer_*` contain:
 
 - `traj.jsonl` with `step_num`, `response`, and `screenshot_file`
-- PNG screenshots beside the trajectory
+- PNG screenshots beside the trajectory (`screenshot_file` for step 1 is the initial desktop state)
 - `result.txt` with the evaluator score
 
 Point `train_sft.dataset.format: uitars_trace` at those rollout roots and set `task_examples_dir` to `GUI-Docker-Env/evaluation_examples/examples`. Training code stages cached JSONL under `datasets/runtime/uitars-traces-*`.

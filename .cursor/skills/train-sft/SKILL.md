@@ -48,7 +48,7 @@ python training/build_uitars_sft_dataset.py --config training/configs/sft_exampl
 
 Use `sample_mode: full_trajectory` to emit one row per rollout and train all assistant turns.
 
-Rollout dirs must include an initial observation screenshot (`initial.png`, `initial_screenshot.png`, or `step_0*.png`) so step 1 can be reconstructed.
+Each `traj.jsonl` row's `screenshot_file` is the pre-action observation for that step; step 1's screenshot is the initial desktop state.
 
 ### Legacy chat JSONL
 
