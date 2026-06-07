@@ -182,5 +182,6 @@ scripts/*
 .cursor/plans/
 .cursor/agents/
 .cursor/skills/enable-amnezia-vpn/
+.cursor/skills/launch-dart-rollouter/config/manifest.local.yaml
 
 examples/osworld/async/run_trainer_debug_w_rollout_stepwise_train_pt_huoshan.sh

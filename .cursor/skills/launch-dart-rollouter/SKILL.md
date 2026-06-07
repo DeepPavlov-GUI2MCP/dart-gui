@@ -5,7 +5,7 @@ description: Run the DART rollouter model service on one or more GPU devices in 
 
 # Launch dart-rollouter
 
-Launch `model_service.py` + vLLM on GPU machine(s). Devices and model presets live in `config/manifest.yaml`. **Repo root auto-detects** from the skill path — no hardcoded `/workspace/dart-gui` required on the primary host.
+Launch `model_service.py` + vLLM on GPU machine(s). Devices and model presets are resolved from **`config/manifest.local.yaml`** (gitignored, machine-specific). Committed defaults live in **`config/manifest.defaults.yaml`**. On first launch, `manifest.local.yaml` is copied from defaults if missing. **Repo root auto-detects** from the skill path — no hardcoded `/workspace/dart-gui` required on the primary host.
 
 ## Quick start (this GPU host)
 
@@ -61,9 +61,31 @@ bash .cursor/skills/launch-dart-rollouter/scripts/run_service.sh stop
 
 **Opt-out:** If the user says to run in the foreground or without tmux, run the resolved `SERVICE_CMD` directly in `validation/` and warn that closing the terminal will stop inference.
 
+## Manifest layout
+
+| File | Tracked | Purpose |
+|------|---------|---------|
+| `config/manifest.defaults.yaml` | yes | Committed template — safe defaults for new machines |
+| `config/manifest.local.yaml` | no (gitignored) | **Active launch config** — edit replicas, `max_num_seqs`, ports, etc. |
+
+**First launch** copies defaults → local automatically.
+
+**Tune this machine:**
+
+```bash
+# Edit live settings (e.g. holotron replicas, max_num_seqs)
+${EDITOR:-nano} .cursor/skills/launch-dart-rollouter/config/manifest.local.yaml
+
+# Reset local manifest from committed defaults
+cp .cursor/skills/launch-dart-rollouter/config/manifest.defaults.yaml \
+   .cursor/skills/launch-dart-rollouter/config/manifest.local.yaml
+```
+
+Override path entirely: `DART_ROLLOUTER_MANIFEST=/path/to/manifest.yaml`.
+
 ## Devices and profiles
 
-Edit `config/manifest.yaml` to register GPU hosts and model presets.
+Edit **`manifest.local.yaml`** for machine-specific launch settings. Update **`manifest.defaults.yaml`** when adding new profiles/devices for the whole team.
 
 | Variable | Purpose |
 |----------|---------|
@@ -72,6 +94,7 @@ Edit `config/manifest.yaml` to register GPU hosts and model presets.
 | `REPO_ROOT` | Override auto-detected repo path |
 | `FORCE=1` | Replace existing tmux session on start |
 | `SERVICE_CMD` | Override full launch command |
+| `DART_ROLLOUTER_MANIFEST` | Override manifest path (default: `manifest.local.yaml`) |
 
 **Built-in profiles**
 
@@ -79,6 +102,7 @@ Edit `config/manifest.yaml` to register GPU hosts and model presets.
 |---------|-------|------|-------|
 | `uitars-1.5` | `ByteDance-Seed/UI-TARS-1.5-7B` | 1 | Default |
 | `holo3-2gpu` | `Hcompany/Holo3-35B-A3B` | 2 (TP=2) | One replica spans both GPUs |
+| `holotron-3-nano` | `Hcompany/Holotron-3-Nano` | 2 (TP=1) | One replica per GPU; tune `max_num_seqs` in local manifest |
 
 **Built-in devices**
 
@@ -178,7 +202,8 @@ From the local CPU machine, use **connect-dart-rollouter** before running **eval
 
 | Script | When |
 |--------|------|
-| `config/manifest.yaml` | Device hosts + model profiles |
+| `config/manifest.defaults.yaml` | Committed device/profile template |
+| `config/manifest.local.yaml` | Gitignored active launch manifest |
 | `scripts/resolve_config.py` | Resolve DEVICE/PROFILE → launch settings |
 | `scripts/run_service.sh` | Start/stop/status on **local** GPU machine |
 | `scripts/remote.sh` | Same commands over SSH to manifest device |

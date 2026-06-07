@@ -390,7 +390,9 @@ class ModelServicePool:
         """启动 vLLM 子进程。"""
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = ",".join(str(gpu_id) for gpu_id in gpu_ids)
-        
+        # Avoid torch.distributed port collisions when launching multiple replicas in parallel.
+        env["VLLM_PORT"] = str(port + 1000)
+
         vllm_command = [
             "vllm", "serve", ckpt_path,
             "--trust-remote-code",

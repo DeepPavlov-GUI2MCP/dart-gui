@@ -10,7 +10,7 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") <start|stop|restart|status|attach|check|check-venv|install|list> [--device NAME] [--profile NAME]
 
-Runs the launch-dart-rollouter skill on a remote GPU host defined in manifest.yaml.
+Runs the launch-dart-rollouter skill on a remote GPU host defined in manifest.local.yaml.
 
   list      Show devices and profiles
   install   Create remote .venv (runs install on target host)
@@ -18,7 +18,7 @@ Runs the launch-dart-rollouter skill on a remote GPU host defined in manifest.ya
   check     SSH + curl health on remote host
 
 Environment:
-  DEVICE, PROFILE   Select target from config/manifest.yaml
+  DEVICE, PROFILE   Select target from config/manifest.local.yaml
   FORCE=1           Replace existing remote tmux session on start
 
 Examples:
@@ -63,7 +63,7 @@ remote_run() {
   local remote_script="${REPO_ROOT}/.cursor/skills/launch-dart-rollouter/scripts/run_service.sh"
 
   echo "Remote: ${SSH_HOST}  Device: ${DEVICE}  Profile: ${PROFILE}"
-  local remote_cmd="DEVICE=${DEVICE} PROFILE=${PROFILE} REPO_ROOT=${REPO_ROOT} DART_ROLLOUTER_MANIFEST=${REPO_ROOT}/.cursor/skills/launch-dart-rollouter/config/manifest.yaml"
+  local remote_cmd="DEVICE=${DEVICE} PROFILE=${PROFILE} REPO_ROOT=${REPO_ROOT}"
   if [[ -n "${FORCE:-}" ]]; then
     remote_cmd+=" FORCE=1"
   fi

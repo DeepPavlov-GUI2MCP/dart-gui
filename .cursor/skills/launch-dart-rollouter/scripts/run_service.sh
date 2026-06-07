@@ -19,7 +19,7 @@ Usage: $(basename "$0") <start|stop|restart|status|attach|check|check-venv|list|
   attach      Attach to tmux session
   check       curl model service + vLLM health on this machine
   check-venv  Verify .venv has vllm/torch and CUDA GPUs
-  list        Show devices and profiles from manifest.yaml
+  list        Show devices and profiles from manifest.local.yaml
   install     Create or verify .venv for DEVICE/PROFILE
 
 Environment:
@@ -27,7 +27,7 @@ Environment:
   PROFILE=${PROFILE:-<manifest default>}
   SERVICE_CMD   Override full launch command (skips profile resolution)
   FORCE=1       Replace existing tmux session on start
-  DART_ROLLOUTER_MANIFEST  Path to manifest.yaml
+  DART_ROLLOUTER_MANIFEST  Override manifest path (default: config/manifest.local.yaml)
 
 Examples:
   PROFILE=holo3-2gpu $(basename "$0") start

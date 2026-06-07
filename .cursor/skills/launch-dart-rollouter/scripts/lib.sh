@@ -5,9 +5,29 @@ set -euo pipefail
 _LIB_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "${_LIB_SCRIPT}/.." && pwd)"
 SCRIPTS_DIR="${SKILL_DIR}/scripts"
-MANIFEST="${DART_ROLLOUTER_MANIFEST:-${SKILL_DIR}/config/manifest.yaml}"
+MANIFEST_DEFAULTS="${SKILL_DIR}/config/manifest.defaults.yaml"
+MANIFEST_LOCAL="${SKILL_DIR}/config/manifest.local.yaml"
+
+resolve_manifest_path() {
+  if [[ -n "${DART_ROLLOUTER_MANIFEST:-}" ]]; then
+    printf '%s' "${DART_ROLLOUTER_MANIFEST}"
+    return
+  fi
+  if [[ ! -f "${MANIFEST_LOCAL}" ]]; then
+    if [[ ! -f "${MANIFEST_DEFAULTS}" ]]; then
+      echo "FAIL: missing manifest defaults: ${MANIFEST_DEFAULTS}" >&2
+      exit 1
+    fi
+    cp "${MANIFEST_DEFAULTS}" "${MANIFEST_LOCAL}"
+    echo "Created local manifest from defaults: ${MANIFEST_LOCAL}" >&2
+  fi
+  printf '%s' "${MANIFEST_LOCAL}"
+}
+
+MANIFEST="$(resolve_manifest_path)"
 
 load_manifest() {
+  MANIFEST="$(resolve_manifest_path)"
   if [[ ! -f "${MANIFEST}" ]]; then
     echo "FAIL: manifest not found: ${MANIFEST}" >&2
     exit 1

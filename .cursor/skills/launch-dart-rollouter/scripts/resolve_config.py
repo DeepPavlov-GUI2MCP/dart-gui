@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve device + profile from manifest.yaml into launch settings."""
+"""Resolve device + profile from manifest.local.yaml into launch settings."""
 
 from __future__ import annotations
 
@@ -17,16 +17,36 @@ except ImportError:  # pragma: no cover
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-MANIFEST_PATH = Path(
-    os.environ.get(
-        "DART_ROLLOUTER_MANIFEST",
-        SCRIPT_DIR.parent / "config" / "manifest.yaml",
-    )
-)
+CONFIG_DIR = SCRIPT_DIR.parent / "config"
+MANIFEST_DEFAULTS = CONFIG_DIR / "manifest.defaults.yaml"
+MANIFEST_LOCAL = CONFIG_DIR / "manifest.local.yaml"
+
+
+def _resolve_manifest_path(explicit: Path | None = None) -> Path:
+    if explicit is not None:
+        return explicit
+    if os.environ.get("DART_ROLLOUTER_MANIFEST"):
+        return Path(os.environ["DART_ROLLOUTER_MANIFEST"])
+    if not MANIFEST_LOCAL.is_file():
+        if not MANIFEST_DEFAULTS.is_file():
+            raise FileNotFoundError(
+                f"Missing manifest defaults: {MANIFEST_DEFAULTS}"
+            )
+        import shutil
+
+        shutil.copy2(MANIFEST_DEFAULTS, MANIFEST_LOCAL)
+        print(
+            f"Created local manifest from defaults: {MANIFEST_LOCAL}",
+            file=sys.stderr,
+        )
+    return MANIFEST_LOCAL
+
+
+MANIFEST_PATH = _resolve_manifest_path()
 
 
 def _infer_repo_root(manifest_path: Path) -> str | None:
-    """Infer repo root from .../repo/.cursor/skills/launch-dart-rollouter/config/manifest.yaml."""
+    """Infer repo root from .../repo/.cursor/skills/launch-dart-rollouter/config/manifest.*.yaml."""
     try:
         candidate = manifest_path.resolve().parents[4]
     except IndexError:
@@ -59,7 +79,7 @@ def _load_manifest(path: Path) -> dict[str, Any]:
         data = yaml.safe_load(text)
     else:
         raise RuntimeError(
-            "PyYAML is required to read manifest.yaml (pip install pyyaml)"
+            "PyYAML is required to read manifest YAML (pip install pyyaml)"
         )
     if not isinstance(data, dict):
         raise ValueError(f"Invalid manifest: {path}")
@@ -152,8 +172,11 @@ def main() -> int:
     parser.add_argument(
         "--manifest",
         type=Path,
-        default=MANIFEST_PATH,
-        help=f"Manifest path (default: {MANIFEST_PATH})",
+        default=None,
+        help=(
+            "Manifest path "
+            f"(default: {MANIFEST_LOCAL}, seeded from {MANIFEST_DEFAULTS.name})"
+        ),
     )
     parser.add_argument(
         "--format",
@@ -164,10 +187,11 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="List devices and profiles")
     args = parser.parse_args()
 
-    manifest = _load_manifest(args.manifest)
+    manifest_path = _resolve_manifest_path(args.manifest)
+    manifest = _load_manifest(manifest_path)
 
     if args.list:
-        inferred = _infer_repo_root(args.manifest.resolve())
+        inferred = _infer_repo_root(manifest_path.resolve())
         if inferred:
             print(f"Detected repo_root: {inferred}")
         print("Devices:")
@@ -184,7 +208,7 @@ def main() -> int:
             )
         return 0
 
-    resolved = resolve(manifest, args.device, args.profile, args.manifest.resolve())
+    resolved = resolve(manifest, args.device, args.profile, manifest_path.resolve())
 
     if args.format == "json":
         print(json.dumps(resolved, indent=2))
