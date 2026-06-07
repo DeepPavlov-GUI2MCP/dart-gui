@@ -2,7 +2,6 @@ train_sft:
   model:
     base_model: ByteDance-Seed/UI-TARS-1.5-7B
     max_seq_length: 2048
-    load_in_4bit: true
     trust_remote_code: true
 
   dataset:
@@ -30,7 +29,7 @@ train_sft:
     save_steps: 5
     packing: false
     gradient_checkpointing: true
-    bf16: true
+    fp16: true
 
   lora:
     r: 16

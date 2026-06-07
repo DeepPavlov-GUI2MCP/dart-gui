@@ -1,18 +1,18 @@
 ---
 name: train-sft
-description: Train QLoRA adapters for Qwen-like or UI-TARS models with TRL. Use when preparing SFT datasets, editing `training/run_sft.py` configs, launching TRL SFT training, or publishing adapters to Hugging Face Hub.
+description: Train FP16 LoRA adapters for Qwen-like or UI-TARS models with TRL. Use when preparing SFT datasets, editing `training/run_sft.py` configs, launching TRL SFT training, or publishing adapters to Hugging Face Hub.
 ---
 
-# Train SFT (TRL QLoRA)
+# Train SFT (TRL LoRA)
 
-Use `training/run_sft.py` to stage an SFT dataset from Hugging Face, validate Hub write access, and launch TRL `SFTTrainer` with 4-bit QLoRA.
+Use `training/run_sft.py` to stage an SFT dataset from Hugging Face, validate Hub write access, and launch TRL `SFTTrainer` with FP16 LoRA.
 
 ## Setup
 
 ```bash
 cd /home/pitchblack/dart-gui
 source .venv/bin/activate
-uv pip install trl bitsandbytes datasets huggingface-hub pyyaml
+uv pip install trl peft datasets huggingface-hub pyyaml
 ```
 
 GPU training requires a CUDA-capable environment with the Torch stack from [requirements.txt](../../requirements.txt).

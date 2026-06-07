@@ -51,7 +51,6 @@ class DatasetSettings:
 class ModelSettings:
     base_model: str
     max_seq_length: int = 2048
-    load_in_4bit: bool = True
     trust_remote_code: bool = True
 
 
@@ -83,7 +82,8 @@ class TrainingSettings:
     weight_decay: float = 0.0
     packing: bool = True
     gradient_checkpointing: bool = True
-    bf16: bool = True
+    fp16: bool = True
+    bf16: bool = False
 
 
 @dataclass(frozen=True)
@@ -114,7 +114,7 @@ class ResolvedConfig:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train models with TRL SFT (QLoRA).")
+    parser = argparse.ArgumentParser(description="Train models with TRL SFT (LoRA).")
     parser.add_argument("--config", type=str, default=None, help="Path to a full YAML config.")
     parser.add_argument(
         "--dry-run",
@@ -185,7 +185,6 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
     model = ModelSettings(
         base_model=get_required_str(model_cfg, "base_model", "model"),
         max_seq_length=get_optional_int(model_cfg, "max_seq_length", 2048),
-        load_in_4bit=get_optional_bool(model_cfg, "load_in_4bit", True),
         trust_remote_code=get_optional_bool(model_cfg, "trust_remote_code", True),
     )
 
@@ -239,7 +238,8 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         weight_decay=get_optional_float(training_cfg, "weight_decay", 0.0),
         packing=get_optional_bool(training_cfg, "packing", True),
         gradient_checkpointing=get_optional_bool(training_cfg, "gradient_checkpointing", True),
-        bf16=get_optional_bool(training_cfg, "bf16", True),
+        fp16=get_optional_bool(training_cfg, "fp16", True),
+        bf16=get_optional_bool(training_cfg, "bf16", False),
     )
 
     resolved_hub = HubSettings(
@@ -379,6 +379,7 @@ def build_sft_config(config: ResolvedConfig) -> Any:
     import torch
     from trl import SFTConfig
 
+    use_fp16 = config.training.fp16 and torch.cuda.is_available()
     use_bf16 = config.training.bf16 and torch.cuda.is_available()
     packing = config.training.packing
     if is_vision_model(config.model.base_model, config.model.trust_remote_code):
@@ -394,6 +395,7 @@ def build_sft_config(config: ResolvedConfig) -> Any:
         "weight_decay": config.training.weight_decay,
         "max_length": config.model.max_seq_length,
         "packing": packing,
+        "fp16": use_fp16,
         "bf16": use_bf16,
         "gradient_checkpointing": config.training.gradient_checkpointing,
         "report_to": "none",
@@ -414,7 +416,7 @@ def build_sft_config(config: ResolvedConfig) -> Any:
 def load_model_and_tokenizer(config: ResolvedConfig):
     import torch
     from peft import LoraConfig
-    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer, BitsAndBytesConfig
+    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
 
     trust_remote_code = config.model.trust_remote_code
     tokenizer = AutoTokenizer.from_pretrained(
@@ -427,16 +429,8 @@ def load_model_and_tokenizer(config: ResolvedConfig):
     model_kwargs: dict[str, Any] = {
         "trust_remote_code": trust_remote_code,
         "device_map": "auto",
+        "torch_dtype": torch.float16,
     }
-    if config.model.load_in_4bit:
-        model_kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_use_double_quant=True,
-        )
-    else:
-        model_kwargs["torch_dtype"] = torch.bfloat16
 
     if is_vision_model(config.model.base_model, trust_remote_code):
         model = AutoModelForImageTextToText.from_pretrained(config.model.base_model, **model_kwargs)
@@ -458,7 +452,7 @@ def print_dry_run_summary(config: ResolvedConfig, data_path: Path, sft_config: A
     print(f"Output dir: {config.output_dir}")
     print(f"Base model: {config.model.base_model}")
     print(f"Max seq length: {config.model.max_seq_length}")
-    print(f"Load in 4bit: {config.model.load_in_4bit}")
+    print(f"Model dtype: float16")
     print(f"LoRA r/alpha: {config.lora.r}/{config.lora.alpha}")
     print(f"Training: {sft_config}")
 

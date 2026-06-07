@@ -21,7 +21,8 @@ def test_resolve_config_from_example():
     config = run_sft.load_config_file(str(SFT_CONFIG))
     assert config.model.base_model == "ByteDance-Seed/UI-TARS-1.5-7B"
     assert config.model.max_seq_length == 2048
-    assert config.model.load_in_4bit is True
+    assert config.training.fp16 is True
+    assert config.training.bf16 is False
     assert config.dataset.repo_id == "mlabonne/FineTome-100k"
     assert config.dataset.field_messages == "conversations"
     assert config.lora.r == 16
