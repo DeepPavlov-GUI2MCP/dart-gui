@@ -5,6 +5,3 @@
 	path = dart_rollouter
 	url = git@github.com:DeepPavlov-GUI2MCP/dart_rollouter.git
 	branch = dev
-[submodule "axolotl"]
-	path = axolotl
-	url = git@github.com:axolotl-ai-cloud/axolotl.git
