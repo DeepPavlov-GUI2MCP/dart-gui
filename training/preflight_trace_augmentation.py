@@ -7,15 +7,26 @@ import os
 import shutil
 import sys
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal
+from urllib import error, request
 
 import requests
 from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GUI_DOCKER_ENV = REPO_ROOT / "GUI-Docker-Env"
+COST_AUGMENTATION_LOG = "cost_augmentation.jsonl"
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+FALLBACK_MODEL_PRICING: dict[str, dict[str, float]] = {
+    "gpt-4o-mini": {"prompt": 0.00000015, "completion": 0.0000006},
+    "gpt-4o-mini-2024-07-18": {"prompt": 0.00000015, "completion": 0.0000006},
+    "gpt-4o": {"prompt": 0.0000025, "completion": 0.00001},
+    "gpt-4o-2024-08-06": {"prompt": 0.0000025, "completion": 0.00001},
+}
+_pricing_cache: dict[str, dict[str, float]] | None = None
 if str(GUI_DOCKER_ENV) not in sys.path:
     sys.path.insert(0, str(GUI_DOCKER_ENV))
 
@@ -103,7 +114,26 @@ class TaskAugmentResult:
     source: str | None = None
     llm_calls: int = 0
     cache_hit: bool = False
+    cost_usd: float = 0.0
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class UsageCost:
+    num_tokens: int
+    cost_usd: float
+    cost_source: str
+    prompt_tokens: int
+    completion_tokens: int
+
+
+@dataclass(frozen=True)
+class CostLogContext:
+    trace_root: Path
+    task_id: str
+    macro_state_id: str
+    cache_key: str
+    mode: AugmentMode
 
 
 def resolve_trace_root(value: str | Path) -> Path:
@@ -293,16 +323,32 @@ def normalize_step_response(
     thought = raw_step.get("thought")
     if not isinstance(thought, str) or not thought.strip():
         thought = deterministic_preflight_thought(step_index, config_step)
-    note = raw_step.get("note")
     tool_call = raw_step.get("tool_call")
     if not isinstance(tool_call, dict):
         tool_call = fallback_tool_call(config_step, screenshot_path)
     else:
         try:
-            Step.model_validate({"thought": thought, "note": note, "tool_call": tool_call})
+            Step.model_validate({"thought": thought, "tool_call": tool_call})
         except Exception:
             tool_call = fallback_tool_call(config_step, screenshot_path)
-    step = Step(thought=thought.strip(), note=note if isinstance(note, str) else None, tool_call=tool_call)
+    step = Step(thought=thought.strip(), tool_call=tool_call)
+    return step.model_dump_json(exclude_none=True)
+
+
+def normalize_oracle_step_response(
+    raw_step: dict[str, Any],
+    *,
+    config_step: dict[str, Any],
+    screenshot_path: Path,
+    step_index: int = 0,
+) -> str:
+    thought = raw_step.get("thought")
+    if not isinstance(thought, str) or not thought.strip():
+        thought = deterministic_preflight_thought(step_index, config_step)
+    step = Step(
+        thought=thought.strip(),
+        tool_call=fallback_tool_call(config_step, screenshot_path),
+    )
     return step.model_dump_json(exclude_none=True)
 
 
@@ -384,15 +430,18 @@ def write_traces_manifest(trace_root: Path, entries: list[TraceManifestEntry]) -
 
 
 def cache_dir_for_mode(trace_root: Path, mode: AugmentMode) -> Path:
-    return trace_root / "preflight_reasoning_cache" / mode
+    if mode == "holo-native":
+        return trace_root / "preflight_reasoning_cache" / "holo_native"
+    model = load_oracle_config()["model"]
+    return trace_root / "preflight_reasoning_cache" / "openai_api" / model_path_segment(model)
 
 
 def cache_path(trace_root: Path, mode: AugmentMode, cache_key: str) -> Path:
     return cache_dir_for_mode(trace_root, mode) / f"{cache_key}.json"
 
 
-def load_cache(trace_root: Path, mode: AugmentMode, cache_key: str) -> PreflightCache | None:
-    path = cache_path(trace_root, mode, cache_key)
+def load_cache(settings: AugmentSettings, cache_key: str) -> PreflightCache | None:
+    path = cache_path_for_settings(settings, cache_key)
     if not path.is_file():
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -406,14 +455,14 @@ def load_cache(trace_root: Path, mode: AugmentMode, cache_key: str) -> Preflight
     return PreflightCache(
         macro_state_id=str(payload["macro_state_id"]),
         preflight_steps_hash=str(payload["preflight_steps_hash"]),
-        mode=mode,
+        mode=settings.mode,
         source_task_id=str(payload.get("source_task_id") or ""),
         steps=sorted(steps, key=lambda item: item.preflight_step_index),
     )
 
 
-def save_cache(trace_root: Path, cache: PreflightCache) -> None:
-    path = cache_path(trace_root, cache.mode, f"{cache.macro_state_id}:{cache.preflight_steps_hash}")
+def save_cache(settings: AugmentSettings, cache: PreflightCache) -> None:
+    path = cache_path_for_settings(settings, f"{cache.macro_state_id}:{cache.preflight_steps_hash}")
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "macro_state_id": cache.macro_state_id,
@@ -454,10 +503,38 @@ def append_manifest_line(trace_root: Path, payload: dict[str, Any]) -> None:
         handle.write("\n")
 
 
+def model_path_segment(model: str) -> str:
+    return model.replace("/", "__").strip()
+
+
+def backend_model_for_settings(settings: AugmentSettings) -> str:
+    if settings.mode == "openai-api":
+        return load_oracle_config()["model"]
+    return load_holo_config()["model"]
+
+
+def augment_storage_dir(settings: AugmentSettings) -> Path:
+    if settings.mode == "holo-native":
+        return settings.trace_root / "preflight_augmented" / "holo_native"
+    model = backend_model_for_settings(settings)
+    return settings.trace_root / "preflight_augmented" / "openai_api" / model_path_segment(model)
+
+
+def cache_storage_dir(settings: AugmentSettings) -> Path:
+    if settings.mode == "holo-native":
+        return settings.trace_root / "preflight_reasoning_cache" / "holo_native"
+    model = backend_model_for_settings(settings)
+    return settings.trace_root / "preflight_reasoning_cache" / "openai_api" / model_path_segment(model)
+
+
+def cache_path_for_settings(settings: AugmentSettings, cache_key: str) -> Path:
+    return cache_storage_dir(settings) / f"{cache_key}.json"
+
+
 def augmented_output_dir(settings: AugmentSettings) -> Path:
     if settings.output_dir is not None:
         return settings.output_dir
-    return settings.trace_root / "preflight_augmented" / settings.mode
+    return augment_storage_dir(settings)
 
 
 def augmented_task_path(settings: AugmentSettings, task_id: str) -> Path:
@@ -514,6 +591,7 @@ def write_augmented_preflight(
         "macro_state_id": metadata.macro_state_id,
         "cache_key": metadata.cache_key,
         "mode": settings.mode,
+        "backend_model": backend_model_for_settings(settings),
         "source": source,
         "source_task_id": source_task_id,
         "steps": steps,
@@ -566,6 +644,167 @@ def load_holo_config() -> dict[str, Any]:
         "max_pixels": float(os.getenv("PREFLIGHT_HOLO_MAX_PIXELS") or "2116800"),
         "min_pixels": float(os.getenv("PREFLIGHT_HOLO_MIN_PIXELS") or "3136"),
     }
+
+
+def _normalize_model_id(model: str) -> str:
+    return model.strip().lower()
+
+
+def _model_lookup_keys(model: str) -> list[str]:
+    normalized = _normalize_model_id(model)
+    keys = [normalized]
+    if "/" in normalized:
+        keys.append(normalized.split("/", 1)[1])
+    return keys
+
+
+def fetch_openrouter_pricing(*, timeout: float = 15.0) -> dict[str, dict[str, float]]:
+    global _pricing_cache
+    if _pricing_cache is not None:
+        return _pricing_cache
+
+    pricing: dict[str, dict[str, float]] = dict(FALLBACK_MODEL_PRICING)
+    try:
+        req = request.Request(OPENROUTER_MODELS_URL, method="GET")
+        with request.urlopen(req, timeout=timeout) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+    except (error.URLError, error.HTTPError, json.JSONDecodeError, TimeoutError):
+        _pricing_cache = pricing
+        return pricing
+
+    for entry in body.get("data", []):
+        model_id = entry.get("id")
+        raw_pricing = entry.get("pricing") or {}
+        prompt = raw_pricing.get("prompt")
+        completion = raw_pricing.get("completion")
+        if not model_id or prompt is None or completion is None:
+            continue
+        rates = {"prompt": float(prompt), "completion": float(completion)}
+        pricing[_normalize_model_id(model_id)] = rates
+        if "/" in model_id:
+            pricing[_normalize_model_id(model_id.split("/", 1)[1])] = rates
+
+    _pricing_cache = pricing
+    return pricing
+
+
+def lookup_model_rates(model: str) -> dict[str, float]:
+    pricing = fetch_openrouter_pricing()
+    for key in _model_lookup_keys(model):
+        rates = pricing.get(key)
+        if rates is not None:
+            return rates
+    for key in _model_lookup_keys(model):
+        for known, rates in pricing.items():
+            if key in known or known in key:
+                return rates
+    raise KeyError(f"no pricing found for model: {model}")
+
+
+def is_local_inference_url(base_url: str) -> bool:
+    lowered = base_url.lower()
+    return "127.0.0.1" in lowered or "localhost" in lowered
+
+
+def extract_api_cost_usd(response_body: dict[str, Any]) -> float | None:
+    usage = response_body.get("usage") or {}
+    for container in (usage, response_body):
+        cost = container.get("cost")
+        if cost is not None:
+            return float(cost)
+        total_cost = container.get("total_cost")
+        if total_cost is not None:
+            return float(total_cost)
+    return None
+
+
+def compute_usage_cost(
+    *,
+    response_body: dict[str, Any],
+    model: str,
+    base_url: str,
+) -> UsageCost:
+    usage = response_body.get("usage") or {}
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    num_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
+
+    if is_local_inference_url(base_url):
+        return UsageCost(
+            num_tokens=num_tokens,
+            cost_usd=0.0,
+            cost_source="local_zero",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    api_cost = extract_api_cost_usd(response_body)
+    if api_cost is not None:
+        return UsageCost(
+            num_tokens=num_tokens,
+            cost_usd=api_cost,
+            cost_source="api",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    try:
+        rates = lookup_model_rates(model)
+    except KeyError:
+        return UsageCost(
+            num_tokens=num_tokens,
+            cost_usd=0.0,
+            cost_source="unknown_zero",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    cost_usd = (prompt_tokens * rates["prompt"]) + (completion_tokens * rates["completion"])
+    return UsageCost(
+        num_tokens=num_tokens,
+        cost_usd=cost_usd,
+        cost_source="openrouter_pricing",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
+
+
+def append_cost_augmentation_log(trace_root: Path, record: dict[str, Any]) -> Path:
+    path = trace_root / COST_AUGMENTATION_LOG
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    return path
+
+
+def log_augmentation_cost(
+    cost_context: CostLogContext,
+    *,
+    response_body: dict[str, Any],
+    model: str,
+    base_url: str,
+    preflight_step_indices: list[int],
+) -> UsageCost:
+    usage_cost = compute_usage_cost(response_body=response_body, model=model, base_url=base_url)
+    append_cost_augmentation_log(
+        cost_context.trace_root,
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "task_id": cost_context.task_id,
+            "macro_state_id": cost_context.macro_state_id,
+            "cache_key": cost_context.cache_key,
+            "mode": cost_context.mode,
+            "preflight_step_indices": preflight_step_indices,
+            "model": model,
+            "base_url": base_url,
+            "num_tokens": usage_cost.num_tokens,
+            "prompt_tokens": usage_cost.prompt_tokens,
+            "completion_tokens": usage_cost.completion_tokens,
+            "cost": usage_cost.cost_usd,
+            "cost_source": usage_cost.cost_source,
+        },
+    )
+    return usage_cost
 
 
 def extract_completion_text(payload: dict[str, Any]) -> str:
@@ -638,7 +877,8 @@ def build_oracle_messages(
         "You are a meta-observer annotating a GUI agent trace. "
         "Given screenshots and a fixed preflight setup script, write plausible Holotron-style "
         "reasoning for each preflight step. Preflight setup happens before the main task. "
-        "Return JSON only: {\"steps\":[{\"preflight_step_index\":0,\"note\":\"...\",\"thought\":\"...\",\"tool_call\":{...}}]}"
+        "Actions are scripted separately; provide thought only. "
+        "Return JSON only: {\"steps\":[{\"preflight_step_index\":0,\"thought\":\"...\"}]}"
     )
     user_parts: list[Any] = [
         {
@@ -693,7 +933,9 @@ def generate_oracle_responses(
     rollout_dir: Path,
     indices: list[int],
     config: dict[str, Any],
-) -> dict[int, str]:
+    *,
+    cost_context: CostLogContext | None = None,
+) -> tuple[dict[int, str], float]:
     messages = build_oracle_messages(metadata, observed, rollout_dir, indices)
     body = {
         "model": config["model"],
@@ -701,6 +943,16 @@ def generate_oracle_responses(
         "messages": messages,
     }
     payload = post_chat_completion(config, body)
+    cost_usd = 0.0
+    if cost_context is not None:
+        usage_cost = log_augmentation_cost(
+            cost_context,
+            response_body=payload,
+            model=config["model"],
+            base_url=config["base_url"],
+            preflight_step_indices=indices,
+        )
+        cost_usd = usage_cost.cost_usd
     parsed = parse_json_response_text(extract_completion_text(payload))
     steps = parsed.get("steps") if isinstance(parsed, dict) else parsed
     if not isinstance(steps, list):
@@ -717,7 +969,7 @@ def generate_oracle_responses(
             continue
         screenshot_path = rollout_dir / row.screenshot_file
         responses[index] = validate_response_string(
-            normalize_step_response(
+            normalize_oracle_step_response(
                 raw_step,
                 config_step=metadata.preflight_steps[index],
                 screenshot_path=screenshot_path,
@@ -729,12 +981,13 @@ def generate_oracle_responses(
             continue
         row = next(item for item in observed if item.preflight_step_index == index)
         screenshot_path = rollout_dir / row.screenshot_file
+        config_step = metadata.preflight_steps[index]
         fallback = Step(
-            thought=f"Execute preflight step {index}.",
-            tool_call=fallback_tool_call(metadata.preflight_steps[index], screenshot_path),
+            thought=deterministic_preflight_thought(index, config_step),
+            tool_call=fallback_tool_call(config_step, screenshot_path),
         )
         responses[index] = fallback.model_dump_json(exclude_none=True)
-    return responses
+    return responses, cost_usd
 
 
 def build_preflight_system_prompt(metadata: TaskMetadata) -> str:
@@ -805,7 +1058,8 @@ def generate_holo_native_response(
     *,
     completed_indices: list[int],
     config: dict[str, Any],
-) -> str:
+    cost_context: CostLogContext | None = None,
+) -> tuple[str, float]:
     screenshot_path = rollout_dir / row.screenshot_file
     if not screenshot_path.is_file():
         raise FileNotFoundError(f"Missing screenshot: {screenshot_path}")
@@ -837,6 +1091,16 @@ def generate_holo_native_response(
         "messages": messages,
     }
     payload = post_chat_completion(config, body)
+    cost_usd = 0.0
+    if cost_context is not None:
+        usage_cost = log_augmentation_cost(
+            cost_context,
+            response_body=payload,
+            model=config["model"],
+            base_url=config["base_url"],
+            preflight_step_indices=[row.preflight_step_index],
+        )
+        cost_usd = usage_cost.cost_usd
     raw = parse_json_response_text(extract_completion_text(payload))
     if not isinstance(raw, dict):
         raise ValueError(f"Holo-native response must be an object: {raw!r}")
@@ -853,7 +1117,7 @@ def generate_holo_native_response(
         step_index=row.preflight_step_index,
         config_step=metadata.preflight_steps[row.preflight_step_index],
         screenshot_path=screenshot_path,
-    )
+    ), cost_usd
 
 
 def merge_cache_steps(cache: PreflightCache | None, new_steps: dict[int, str]) -> PreflightCache:
@@ -887,7 +1151,7 @@ def augment_rollout(settings: AugmentSettings, entry: TraceManifestEntry) -> Tas
 
     metadata = load_task_metadata(settings.task_examples_dir, entry.domain, entry.task_id)
     indices = [row.preflight_step_index for row in observed]
-    cache = load_cache(settings.trace_root, settings.mode, metadata.cache_key)
+    cache = load_cache(settings, metadata.cache_key)
 
     missing = missing_cache_indices(cache, indices)
     responses_by_index: dict[int, str] = {}
@@ -898,18 +1162,28 @@ def augment_rollout(settings: AugmentSettings, entry: TraceManifestEntry) -> Tas
 
     source = "cache"
     llm_calls = 0
+    cost_usd = 0.0
 
     if missing and not settings.dry_run:
+        cost_context = CostLogContext(
+            trace_root=settings.trace_root,
+            task_id=entry.task_id,
+            macro_state_id=metadata.macro_state_id,
+            cache_key=metadata.cache_key,
+            mode=settings.mode,
+        )
         if settings.mode == "openai-api":
             config = load_oracle_config()
-            generated = generate_oracle_responses(
+            generated, call_cost = generate_oracle_responses(
                 metadata,
                 observed,
                 rollout_dir,
                 missing,
                 config,
+                cost_context=cost_context,
             )
             llm_calls = 1
+            cost_usd += call_cost
             source = "llm" if len(responses_by_index) == 0 else "cache+llm"
         else:
             config = load_holo_config()
@@ -917,15 +1191,18 @@ def augment_rollout(settings: AugmentSettings, entry: TraceManifestEntry) -> Tas
             completed: list[int] = []
             for index in sorted(missing):
                 row = next(item for item in observed if item.preflight_step_index == index)
-                generated[index] = generate_holo_native_response(
+                response, call_cost = generate_holo_native_response(
                     metadata,
                     rollout_dir,
                     row,
                     completed_indices=completed,
                     config=config,
+                    cost_context=cost_context,
                 )
+                generated[index] = response
                 completed.append(index)
                 llm_calls += 1
+                cost_usd += call_cost
             source = "llm" if len(responses_by_index) == 0 else "cache+llm"
 
         responses_by_index.update(generated)
@@ -938,7 +1215,7 @@ def augment_rollout(settings: AugmentSettings, entry: TraceManifestEntry) -> Tas
         )
         merged = merge_cache_steps(base_cache, generated)
         merged.source_task_id = entry.task_id
-        save_cache(settings.trace_root, merged)
+        save_cache(settings, merged)
         cache = merged
     elif missing and settings.dry_run:
         source = "dry-run"
@@ -958,6 +1235,7 @@ def augment_rollout(settings: AugmentSettings, entry: TraceManifestEntry) -> Tas
             source=source,
             llm_calls=llm_calls,
             cache_hit=not missing,
+            cost_usd=cost_usd,
         )
 
     output_path = write_augmented_preflight(
@@ -981,6 +1259,7 @@ def augment_rollout(settings: AugmentSettings, entry: TraceManifestEntry) -> Tas
             "macro_state_id": metadata.macro_state_id,
             "cache_key": metadata.cache_key,
             "mode": settings.mode,
+            "backend_model": backend_model_for_settings(settings),
             "source": source,
             "source_task_id": cache.source_task_id if cache else entry.task_id,
             "rollout_dir": entry.rollout_dir,
@@ -993,24 +1272,28 @@ def augment_rollout(settings: AugmentSettings, entry: TraceManifestEntry) -> Tas
         source=source,
         llm_calls=llm_calls,
         cache_hit=not bool(missing),
+        cost_usd=cost_usd,
     )
 
 
 def run_augmentation(settings: AugmentSettings) -> dict[str, Any]:
     settings.trace_root.mkdir(parents=True, exist_ok=True)
     if settings.overwrite:
-        cache_root = cache_dir_for_mode(settings.trace_root, settings.mode)
+        cache_root = cache_storage_dir(settings)
         if cache_root.is_dir():
             shutil.rmtree(cache_root)
-    entries = load_manifest(settings.trace_root, settings.task_examples_dir)
     if settings.write_traces_manifest:
+        entries = discover_manifest_entries(settings.trace_root, settings.task_examples_dir)
         write_traces_manifest(settings.trace_root, entries)
+    else:
+        entries = load_manifest(settings.trace_root, settings.task_examples_dir)
     selected = select_manifest_entries(entries, settings)
 
     results: list[TaskAugmentResult] = []
     failures: list[dict[str, str]] = []
     cache_hits = 0
     llm_calls = 0
+    total_cost = 0.0
     for entry in selected:
         try:
             result = augment_rollout(settings, entry)
@@ -1018,6 +1301,7 @@ def run_augmentation(settings: AugmentSettings) -> dict[str, Any]:
             if result.cache_hit:
                 cache_hits += 1
             llm_calls += result.llm_calls
+            total_cost += result.cost_usd
         except Exception as exc:
             failures.append({"task_id": entry.task_id, "error": str(exc)})
 
@@ -1027,12 +1311,16 @@ def run_augmentation(settings: AugmentSettings) -> dict[str, Any]:
         "ok": not failures,
         "trace_root": str(settings.trace_root),
         "output_dir": str(augmented_output_dir(settings)),
+        "cache_dir": str(cache_storage_dir(settings)),
         "mode": settings.mode,
+        "backend_model": backend_model_for_settings(settings),
         "selected_tasks": len(selected),
         "processed": processed,
         "skipped": skipped,
         "cache_hits": cache_hits,
         "llm_calls": llm_calls,
+        "total_cost": total_cost,
+        "cost_log": str(settings.trace_root / COST_AUGMENTATION_LOG),
         "results": [
             {
                 "task_id": item.task_id,
@@ -1040,6 +1328,7 @@ def run_augmentation(settings: AugmentSettings) -> dict[str, Any]:
                 "source": item.source,
                 "llm_calls": item.llm_calls,
                 "cache_hit": item.cache_hit,
+                "cost_usd": item.cost_usd,
                 "error": item.error,
             }
             for item in results

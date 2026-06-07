@@ -12,6 +12,7 @@ sys.path.insert(0, str(REPO_ROOT / "training"))
 sys.path.insert(0, str(REPO_ROOT / "GUI-Docker-Env"))
 
 from preflight_trace_augmentation import (  # noqa: E402
+    COST_AUGMENTATION_LOG,
     AugmentSettings,
     augmented_task_path,
     bbox_center_to_holo_coords,
@@ -19,6 +20,7 @@ from preflight_trace_augmentation import (  # noqa: E402
     generate_holo_native_response,
     hash_preflight_steps,
     load_task_metadata,
+    normalize_oracle_step_response,
     normalize_step_response,
     observed_preflight_rows,
     run_augmentation,
@@ -75,6 +77,37 @@ def test_normalize_step_response_fills_invalid_tool_call() -> None:
     assert payload["tool_call"]["tool_name"] == "wait"
 
 
+def test_normalize_oracle_step_response_ignores_llm_tool_call() -> None:
+    step = {
+        "op": "click",
+        "meta": {"recorded_bbox": [10, 20, 40, 20], "role": "menu", "name": "Table"},
+    }
+    screenshot = TRACE_ROOT / "rollout/libreoffice_writer/task-a/step_3_20250101@120002.png"
+    response = normalize_oracle_step_response(
+        {
+            "thought": "Open the Table menu.",
+            "tool_call": {"tool_name": "click", "x": 300, "y": 375, "button": "left"},
+        },
+        config_step=step,
+        screenshot_path=screenshot,
+        step_index=1,
+    )
+    payload = json.loads(response)
+    expected = json.loads(
+        normalize_oracle_step_response(
+            {"thought": "Open the Table menu."},
+            config_step=step,
+            screenshot_path=screenshot,
+            step_index=1,
+        )
+    )
+    assert payload["thought"] == "Open the Table menu."
+    assert payload["tool_call"] == expected["tool_call"]
+    x, y = bbox_center_to_holo_coords([10, 20, 40, 20], 100, 80)
+    assert payload["tool_call"]["x"] == x
+    assert payload["tool_call"]["y"] == y
+
+
 def test_oracle_cache_dedup_across_tasks(tmp_path: Path, oracle_env: None) -> None:
     trace_root = tmp_path / "trace"
     trace_root.mkdir()
@@ -91,25 +124,18 @@ def test_oracle_cache_dedup_across_tasks(tmp_path: Path, oracle_env: None) -> No
             {
                 "preflight_step_index": 0,
                 "thought": "Wait for Writer to appear.",
-                "tool_call": {"tool_name": "wait"},
             },
             {
                 "preflight_step_index": 1,
                 "thought": "Open the Table menu.",
-                "tool_call": {
-                    "tool_name": "click",
-                    "element": "Table menu",
-                    "x": 300,
-                    "y": 375,
-                    "button": "left",
-                },
             },
         ]
     }
 
     with patch("preflight_trace_augmentation.post_chat_completion") as mock_post:
         mock_post.return_value = {
-            "choices": [{"message": {"content": json.dumps(oracle_payload)}}]
+            "choices": [{"message": {"content": json.dumps(oracle_payload)}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150, "cost": 0.001},
         }
         settings = AugmentSettings(
             trace_root=trace_root,
@@ -126,15 +152,29 @@ def test_oracle_cache_dedup_across_tasks(tmp_path: Path, oracle_env: None) -> No
     assert mock_post.call_count == 1
 
     task_a = json.loads(
-        (trace_root / "preflight_augmented/openai-api/task-a.json").read_text(encoding="utf-8")
+        (trace_root / "preflight_augmented/openai_api/test-model/task-a.json").read_text(encoding="utf-8")
     )
     task_b = json.loads(
-        (trace_root / "preflight_augmented/openai-api/task-b.json").read_text(encoding="utf-8")
+        (trace_root / "preflight_augmented/openai_api/test-model/task-b.json").read_text(encoding="utf-8")
     )
     assert len(task_a["steps"]) == 2
     assert len(task_b["steps"]) == 2
     assert task_a["source"] in {"llm", "cache+llm"}
     assert task_b["source"] == "cache"
+    step_one = json.loads(task_a["steps"][1]["response"])
+    x, y = bbox_center_to_holo_coords([10, 20, 40, 20], 100, 80)
+    assert step_one["thought"] == "Open the Table menu."
+    assert step_one["tool_call"]["x"] == x
+    assert step_one["tool_call"]["y"] == y
+
+    cost_log = trace_root / COST_AUGMENTATION_LOG
+    assert cost_log.is_file()
+    cost_lines = [json.loads(line) for line in cost_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(cost_lines) == 1
+    assert cost_lines[0]["task_id"] == "task-a"
+    assert cost_lines[0]["cost"] == 0.001
+    assert cost_lines[0]["num_tokens"] == 150
+    assert summary["total_cost"] == 0.001
 
 
 def test_holo_native_prompt_uses_setup_plan(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,9 +189,10 @@ def test_holo_native_prompt_uses_setup_plan(monkeypatch: pytest.MonkeyPatch) -> 
 
     with patch("preflight_trace_augmentation.post_chat_completion") as mock_post:
         mock_post.return_value = {
-            "choices": [{"message": {"content": json.dumps(response_payload)}}]
+            "choices": [{"message": {"content": json.dumps(response_payload)}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         }
-        response = generate_holo_native_response(
+        response, cost_usd = generate_holo_native_response(
             metadata,
             rollout_dir,
             observed[0],
@@ -179,6 +220,7 @@ def test_holo_native_prompt_uses_setup_plan(monkeypatch: pytest.MonkeyPatch) -> 
     assert "Task A microaction" not in system_text
     assert "Task A microaction" not in text
     assert json.loads(response)["tool_call"]["tool_name"] == "wait"
+    assert cost_usd == 0.0
 
 
 def test_hash_preflight_steps_changes_with_steps() -> None:

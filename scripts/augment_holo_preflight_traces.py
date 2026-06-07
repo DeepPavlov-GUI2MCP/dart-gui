@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         default=None,
-        help="Directory for per-task augmented JSON files (default: trace-root/preflight_augmented/<mode>).",
+        help="Directory for per-task augmented JSON files (default: trace-root/preflight_augmented/holo_native or openai_api/<model>).",
     )
     parser.add_argument(
         "--mode",
