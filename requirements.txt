@@ -17,6 +17,7 @@ av==15.0.0
 backcall==0.2.0
 backoff==2.2.1
 beautifulsoup4==4.13.4
+bitsandbytes==0.45.5
 blake3==1.0.4
 bleach==6.2.0
 boto3==1.39.10
@@ -233,6 +234,7 @@ torchdata==0.11.0
 torchvision==0.21.0
 tqdm==4.67.1
 transformers==4.51.1
+trl==0.19.1
 triton==3.2.0
 typer==0.15.2
 typing-extensions==4.13.2
