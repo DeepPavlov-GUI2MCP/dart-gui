@@ -5,30 +5,22 @@ train_sft:
     trust_remote_code: true
 
   dataset:
-    format: uitars_trace
-    trace_roots:
-      - GUI-Docker-Env/results_uitars15_writer_full_20260530_143529/pyautogui/screenshot/ui_tars_1.5
-    task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
-    sample_mode: per_step
-    history_n: 5
-    min_result: 1.0
-    uitars:
-      prompt_style: qwen25vl_normal
-      infer_mode: qwen25vl_normal
-      language: English
-      max_pixels: 12845056
-      min_pixels: 78400
+    format: chat
+    repo_id: mlabonne/FineTome-100k
+    split: train[:8]
+    field_messages: conversations
+    message_property_mappings:
+      role: from
+      content: value
 
   hf:
     api_key: ${HUGGINGFACE_API_KEY}
 
   hub:
-    push_to_hub: true
-    model_id: your-hf-username/ui-tars-sft-example
-    private: true
+    push_to_hub: false
 
   output:
-    output_dir: outputs/sft/ui-tars-example
+    output_dir: outputs/sft/ui-tars-chat-smoke
     datasets_dir: datasets/runtime
 
   training:
@@ -39,7 +31,7 @@ train_sft:
     warmup_steps: 1
     logging_steps: 1
     save_steps: 5
-    packing: false
+    packing: true
     gradient_checkpointing: true
     fp16: true
 

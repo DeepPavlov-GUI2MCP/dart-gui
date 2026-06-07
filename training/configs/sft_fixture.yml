@@ -7,11 +7,10 @@ train_sft:
   dataset:
     format: uitars_trace
     trace_roots:
-      - GUI-Docker-Env/results_uitars15_writer_full_20260530_143529/pyautogui/screenshot/ui_tars_1.5
-    task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
+      - tests/training/fixtures/uitars_trace/rollout
+    task_examples_dir: tests/training/fixtures/uitars_trace/task_examples
     sample_mode: per_step
     history_n: 5
-    min_result: 1.0
     uitars:
       prompt_style: qwen25vl_normal
       infer_mode: qwen25vl_normal
@@ -23,12 +22,10 @@ train_sft:
     api_key: ${HUGGINGFACE_API_KEY}
 
   hub:
-    push_to_hub: true
-    model_id: your-hf-username/ui-tars-sft-example
-    private: true
+    push_to_hub: false
 
   output:
-    output_dir: outputs/sft/ui-tars-example
+    output_dir: outputs/sft/ui-tars-fixture
     datasets_dir: datasets/runtime
 
   training:

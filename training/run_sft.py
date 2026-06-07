@@ -11,6 +11,12 @@ from typing import Any, Mapping, Sequence
 
 import yaml
 
+from build_uitars_sft_dataset import cache_name as uitars_cache_name
+from build_uitars_sft_dataset import stage_trace_dataset
+from uitars_collator import UitarsTraceDataset, make_uitars_data_collator
+from uitars_format import UitarsFormatSettings
+from uitars_trace_dataset import TraceScanSettings, build_trace_dataset_rows
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,7 +40,8 @@ VISION_MODEL_TYPES = frozenset(
 
 @dataclass(frozen=True)
 class DatasetSettings:
-    repo_id: str
+    format: str = "chat"
+    repo_id: str | None = None
     split: str = "train"
     name: str | None = None
     revision: str | None = None
@@ -45,6 +52,12 @@ class DatasetSettings:
         default_factory=lambda: {"role": "role", "content": "content"}
     )
     refresh: bool = False
+    trace_roots: tuple[str, ...] = ()
+    task_examples_dir: str | None = None
+    sample_mode: str = "per_step"
+    history_n: int = 5
+    min_result: float | None = None
+    uitars: UitarsFormatSettings = field(default_factory=UitarsFormatSettings)
 
 
 @dataclass(frozen=True)
@@ -188,8 +201,47 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         trust_remote_code=get_optional_bool(model_cfg, "trust_remote_code", True),
     )
 
+    dataset_format = get_optional_str(dataset_cfg, "format", "chat") or "chat"
+    trace_roots_raw = dataset_cfg.get("trace_roots", [])
+    if trace_roots_raw is None:
+        trace_roots_raw = []
+    if not isinstance(trace_roots_raw, list):
+        raise ValueError("`dataset.trace_roots` must be a list.")
+    trace_roots = tuple(str(item).strip() for item in trace_roots_raw if str(item).strip())
+
+    uitars_cfg = get_mapping(dataset_cfg, "uitars")
+    history_n = get_optional_int(dataset_cfg, "history_n", 5)
+    uitars = UitarsFormatSettings(
+        prompt_style=get_optional_str(uitars_cfg, "prompt_style", "qwen25vl_normal") or "qwen25vl_normal",
+        infer_mode=get_optional_str(uitars_cfg, "infer_mode", "qwen25vl_normal") or "qwen25vl_normal",
+        language=get_optional_str(uitars_cfg, "language", "English") or "English",
+        max_pixels=get_optional_int(uitars_cfg, "max_pixels", 16384 * 28 * 28),
+        min_pixels=get_optional_int(uitars_cfg, "min_pixels", 100 * 28 * 28),
+        history_n=history_n,
+    )
+
+    min_result_raw = dataset_cfg.get("min_result")
+    min_result: float | None = None
+    if min_result_raw is not None:
+        if isinstance(min_result_raw, bool) or not isinstance(min_result_raw, (int, float)):
+            raise ValueError("`dataset.min_result` must be a number.")
+        min_result = float(min_result_raw)
+
+    repo_id = get_optional_str(dataset_cfg, "repo_id")
+    if dataset_format == "chat":
+        if not repo_id:
+            raise ValueError("`dataset.repo_id` is required when `dataset.format` is `chat`.")
+    elif dataset_format == "uitars_trace":
+        if not trace_roots:
+            raise ValueError("`dataset.trace_roots` is required when `dataset.format` is `uitars_trace`.")
+        if not get_optional_str(dataset_cfg, "task_examples_dir"):
+            raise ValueError("`dataset.task_examples_dir` is required when `dataset.format` is `uitars_trace`.")
+    else:
+        raise ValueError("`dataset.format` must be `chat` or `uitars_trace`.")
+
     resolved_dataset = DatasetSettings(
-        repo_id=get_required_str(dataset_cfg, "repo_id", "dataset"),
+        format=dataset_format,
+        repo_id=repo_id,
         split=get_optional_str(dataset_cfg, "split", "train") or "train",
         name=get_optional_str(dataset_cfg, "name"),
         revision=get_optional_str(dataset_cfg, "revision"),
@@ -201,6 +253,12 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
             "dataset.message_property_mappings",
         ),
         refresh=get_optional_bool(dataset_cfg, "refresh", False),
+        trace_roots=trace_roots,
+        task_examples_dir=get_optional_str(dataset_cfg, "task_examples_dir"),
+        sample_mode=get_optional_str(dataset_cfg, "sample_mode", "per_step") or "per_step",
+        history_n=history_n,
+        min_result=min_result,
+        uitars=uitars,
     )
 
     target_modules_raw = lora_cfg.get("target_modules", LoraSettings().target_modules)
@@ -294,11 +352,31 @@ def validate_hub_write(config: ResolvedConfig, *, skip: bool) -> None:
     )
 
 
-def stage_dataset(config: ResolvedConfig) -> Path:
+def stage_dataset(config: ResolvedConfig, *, dry_run: bool = False) -> Path:
+    if config.dataset.format == "uitars_trace":
+        scan_settings = TraceScanSettings(
+            trace_roots=config.dataset.trace_roots,
+            task_examples_dir=config.dataset.task_examples_dir or "",
+            sample_mode=config.dataset.sample_mode,
+            history_n=config.dataset.history_n,
+            min_result=config.dataset.min_result,
+            uitars=config.dataset.uitars,
+        )
+        data_path = config.datasets_dir / uitars_cache_name(scan_settings) / "data.jsonl"
+        if dry_run:
+            rows = build_trace_dataset_rows(scan_settings)
+            if rows and (not data_path.is_file() or config.dataset.refresh):
+                return stage_trace_dataset(scan_settings, config.datasets_dir, refresh=config.dataset.refresh)
+            return data_path
+        return stage_trace_dataset(scan_settings, config.datasets_dir, refresh=config.dataset.refresh)
+
     try:
         from datasets import load_dataset
     except ImportError as exc:
         raise RuntimeError("Install `datasets` before staging Hugging Face datasets.") from exc
+
+    if not config.dataset.repo_id:
+        raise ValueError("`dataset.repo_id` is required for chat datasets.")
 
     dataset_dir = config.datasets_dir / dataset_cache_name(config.dataset)
     data_path = dataset_dir / "data.jsonl"
@@ -382,7 +460,9 @@ def build_sft_config(config: ResolvedConfig) -> Any:
     use_fp16 = config.training.fp16 and torch.cuda.is_available()
     use_bf16 = config.training.bf16 and torch.cuda.is_available()
     packing = config.training.packing
-    if is_vision_model(config.model.base_model, config.model.trust_remote_code):
+    if config.dataset.format == "uitars_trace" or is_vision_model(
+        config.model.base_model, config.model.trust_remote_code
+    ):
         packing = False
     kwargs: dict[str, Any] = {
         "output_dir": str(config.output_dir),
@@ -413,16 +493,22 @@ def build_sft_config(config: ResolvedConfig) -> Any:
     return SFTConfig(**kwargs)
 
 
-def load_model_and_tokenizer(config: ResolvedConfig):
+def load_model_and_processor(config: ResolvedConfig):
     import torch
     from peft import LoraConfig
-    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
     trust_remote_code = config.model.trust_remote_code
-    tokenizer = AutoTokenizer.from_pretrained(
-        config.model.base_model,
-        trust_remote_code=trust_remote_code,
+    use_vision = config.dataset.format == "uitars_trace" or is_vision_model(
+        config.model.base_model, trust_remote_code
     )
+
+    if use_vision:
+        processor = AutoProcessor.from_pretrained(config.model.base_model, trust_remote_code=trust_remote_code)
+        tokenizer = processor.tokenizer
+    else:
+        processor = None
+        tokenizer = AutoTokenizer.from_pretrained(config.model.base_model, trust_remote_code=trust_remote_code)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -432,7 +518,7 @@ def load_model_and_tokenizer(config: ResolvedConfig):
         "torch_dtype": torch.float16,
     }
 
-    if is_vision_model(config.model.base_model, trust_remote_code):
+    if use_vision:
         model = AutoModelForImageTextToText.from_pretrained(config.model.base_model, **model_kwargs)
     else:
         model = AutoModelForCausalLM.from_pretrained(config.model.base_model, **model_kwargs)
@@ -444,11 +530,12 @@ def load_model_and_tokenizer(config: ResolvedConfig):
         target_modules=list(config.lora.target_modules),
         task_type="CAUSAL_LM",
     )
-    return model, tokenizer, peft_config
+    return model, processor, tokenizer, peft_config
 
 
 def print_dry_run_summary(config: ResolvedConfig, data_path: Path, sft_config: Any) -> None:
     print(f"Staged dataset: {data_path}")
+    print(f"Dataset format: {config.dataset.format}")
     print(f"Output dir: {config.output_dir}")
     print(f"Base model: {config.model.base_model}")
     print(f"Max seq length: {config.model.max_seq_length}")
@@ -461,17 +548,29 @@ def train(config: ResolvedConfig, data_path: Path) -> None:
     from trl import SFTTrainer
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    train_dataset = prepare_train_dataset(data_path, config.dataset)
     sft_config = build_sft_config(config)
-    model, tokenizer, peft_config = load_model_and_tokenizer(config)
+    model, processor, tokenizer, peft_config = load_model_and_processor(config)
 
-    trainer = SFTTrainer(
-        model=model,
-        args=sft_config,
-        train_dataset=train_dataset,
-        processing_class=tokenizer,
-        peft_config=peft_config,
-    )
+    if config.dataset.format == "uitars_trace":
+        train_dataset = UitarsTraceDataset(data_path, config.dataset.uitars)
+        data_collator = make_uitars_data_collator(processor)
+        processing_class = processor
+    else:
+        train_dataset = prepare_train_dataset(data_path, config.dataset)
+        data_collator = None
+        processing_class = tokenizer
+
+    trainer_kwargs: dict[str, Any] = {
+        "model": model,
+        "args": sft_config,
+        "train_dataset": train_dataset,
+        "processing_class": processing_class,
+        "peft_config": peft_config,
+    }
+    if data_collator is not None:
+        trainer_kwargs["data_collator"] = data_collator
+
+    trainer = SFTTrainer(**trainer_kwargs)
     trainer.train()
     trainer.save_model(str(config.output_dir))
     if config.hub.push_to_hub:
@@ -486,6 +585,18 @@ def repo_path(value: str) -> Path:
 
 
 def dataset_cache_name(dataset: DatasetSettings) -> str:
+    if dataset.format == "uitars_trace":
+        scan_settings = TraceScanSettings(
+            trace_roots=dataset.trace_roots,
+            task_examples_dir=dataset.task_examples_dir or "",
+            sample_mode=dataset.sample_mode,
+            history_n=dataset.history_n,
+            min_result=dataset.min_result,
+            uitars=dataset.uitars,
+        )
+        return uitars_cache_name(scan_settings)
+    if not dataset.repo_id:
+        raise ValueError("`dataset.repo_id` is required for chat datasets.")
     raw = json.dumps(
         {
             "repo_id": dataset.repo_id,
@@ -581,7 +692,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = load_config_file(args.config) if args.config else resolve_args(args)
     configure_hf_env(config)
     validate_hub_write(config, skip=args.skip_hf_validation)
-    data_path = stage_dataset(config)
+    data_path = stage_dataset(config, dry_run=args.dry_run)
     sft_config = build_sft_config(config)
     if args.dry_run:
         print_dry_run_summary(config, data_path, sft_config)

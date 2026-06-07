@@ -1,0 +1,2 @@
+{"step_num": 1, "response": "Thought: open format menu\nAction: click(start_box='(100,200)')", "screenshot_file": "step_1_20250101@120000.png"}
+{"step_num": 2, "response": "Thought: choose font\nAction: finished(content='done')", "screenshot_file": "step_2_20250101@120001.png"}
