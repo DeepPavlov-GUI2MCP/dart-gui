@@ -171,6 +171,37 @@ These containers are NOT launched directly — use the Desktop Server API.
 
 Root disk is small (~3GB free). Large files must go on `/mnt/data`.
 
+## Git Submodules
+
+This repo tracks [`GUI-Docker-Env`](GUI-Docker-Env) and [`dart_rollouter`](dart_rollouter) as submodules. **Always push submodule repos before pushing the top-level repo.**
+
+### Push order
+
+1. **Commit inside each submodule** that changed (`GUI-Docker-Env`, `dart_rollouter`).
+2. **Push the submodule branch** (usually `dev`) to its remote.
+3. **In the top-level repo**, stage the updated submodule pointer(s) (`git add GUI-Docker-Env dart_rollouter`).
+4. **Commit and push** `dart-gui` only after submodule pushes succeed.
+
+```bash
+# Example: GUI-Docker-Env changed
+cd GUI-Docker-Env
+git status
+git add <files>
+git commit -m "Describe submodule change."
+git push origin dev
+
+cd ..
+git add GUI-Docker-Env
+git commit -m "Bump GUI-Docker-Env submodule ref."
+git push origin <branch>
+```
+
+### Rules
+
+- Do **not** push a top-level commit that bumps submodule pointers unless the referenced submodule commits already exist on the remote.
+- When both submodules change, push **each submodule first**, then update **all** pointers in one top-level commit (or separate commits per submodule — but never push the parent before the child).
+- After cloning or pulling, run `git submodule update --init --recursive` if submodule checkouts look stale.
+
 ## Full Restart Sequence
 
 ```bash
