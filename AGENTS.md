@@ -287,12 +287,12 @@ source /mnt/dart-gui/.venv/bin/activate
 cd /mnt/dart-gui
 python GUI-Docker-Env/scripts/monitor_thunderbird_progress.py \
   --eval-json validation/evaluation_examples/test_thunderbird_all.json \
-  --results-glob "results_thunderbird_all_*" \
+  --results-glob "results/results_thunderbird_all_*" \
   --title "Thunderbird Eval Monitor"
 ```
 
 If you want to inspect one specific run directory instead of the latest matching
-folder, use `--results-dir GUI-Docker-Env/results_thunderbird_all_<timestamp>`.
+folder, use `--results-dir GUI-Docker-Env/results/results_thunderbird_all_<timestamp>`.
 
 ## CoAct Eval
 

@@ -8,7 +8,7 @@ train_sft:
     format: uitars_trace
     trace_source: holo
     trace_roots:
-      - GUI-Docker-Env/results_holo_gpt54_writer_traces_20260607_031517/pyautogui/screenshot/Hcompany/Holotron-3-Nano
+      - GUI-Docker-Env/results/results_holo_gpt54_writer_traces_20260607_031517/pyautogui/screenshot/Hcompany/Holotron-3-Nano
     task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
     sample_mode: per_step
     history_n: 5

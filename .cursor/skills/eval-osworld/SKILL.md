@@ -230,7 +230,7 @@ EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTH
   --test-all-meta-path evaluation_examples/test_writer_first.json \
   --max-workers 1 \
   --max-steps 15 \
-  --result-dir results_uitars15_writer_first \
+  --result-dir results/results_uitars15_writer_first \
   --overwrite"
 bash "${REPO}/.cursor/skills/eval-osworld/scripts/run_eval.sh" start
 ```
@@ -256,7 +256,7 @@ EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTH
   --max-steps 15 \
   --model Hcompany/Holotron-3-Nano \
   --openai-model Hcompany/Holotron-3-Nano \
-  --result-dir results_holo_writer_first \
+  --result-dir results/results_holo_writer_first \
   --overwrite"
 bash "${REPO}/.cursor/skills/eval-osworld/scripts/run_eval.sh" start
 ```
@@ -276,7 +276,7 @@ curl -s -X POST http://127.0.0.1:50003/set_token_limit \
 
 EMULATOR_COUNT=2 bash "${REPO}/.cursor/skills/eval-osworld/scripts/preflight.sh"
 
-RESULT_DIR="results_uitars15_writer_parallel_$(date +%Y%m%d_%H%M%S)"
+RESULT_DIR="results/results_uitars15_writer_parallel_$(date +%Y%m%d_%H%M%S)"
 EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTHONPATH=. python uitars_run/run_uitars.py \
   --domain libreoffice_writer \
   --test-all-meta-path evaluation_examples/test_writer_two.json \
@@ -303,7 +303,7 @@ EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTH
   --test-all-meta-path evaluation_examples/test_all.json \
   --max-workers N \
   --max-steps 15 \
-  --result-dir results_osworld_writer_$(date +%Y%m%d_%H%M%S)"
+  --result-dir results/results_osworld_writer_$(date +%Y%m%d_%H%M%S)"
 bash "${REPO}/.cursor/skills/eval-osworld/scripts/run_eval.sh" start
 ```
 
@@ -318,7 +318,7 @@ EVAL_CMD="source ${REPO}/.venv/bin/activate && cd ${REPO}/GUI-Docker-Env && PYTH
   --test-all-meta-path evaluation_examples/test_nogdrive.json \
   --max-workers N \
   --max-steps 15 \
-  --result-dir results_osworld_nogdrive_$(date +%Y%m%d_%H%M%S)"
+  --result-dir results/results_osworld_nogdrive_$(date +%Y%m%d_%H%M%S)"
 bash "${REPO}/.cursor/skills/eval-osworld/scripts/run_eval.sh" start
 ```
 

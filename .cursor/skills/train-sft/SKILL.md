@@ -27,7 +27,7 @@ Set `train_sft.dataset.format: uitars_trace` and point at eval rollout directori
 dataset:
   format: uitars_trace
   trace_roots:
-    - GUI-Docker-Env/results_uitars15_writer_full_20260530_143529/pyautogui/screenshot/ui_tars_1.5
+    - GUI-Docker-Env/results/results_uitars15_writer_full_20260530_143529/pyautogui/screenshot/ui_tars_1.5
   task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
   sample_mode: per_step          # default; one row per step, loss on final assistant only
   history_n: 5
@@ -54,7 +54,7 @@ Set `trace_source: uitars` to force native UI-TARS traces. Default is `auto`.
 
 ### Holo writer traces
 
-Holo rollouts (for example `GUI-Docker-Env/results_holo_gpt54_writer_traces_*`) use a different artifact timeline:
+Holo rollouts (for example `GUI-Docker-Env/results/results_holo_gpt54_writer_traces_*`) use a different artifact timeline:
 
 - Step 1: initial screenshot (`response: null`)
 - Preflight rows: a11y setup steps (`response: null`, not trained)
@@ -67,7 +67,7 @@ dataset:
   format: uitars_trace
   trace_source: holo          # or auto (detects preflight rows / Holo JSON)
   trace_roots:
-    - GUI-Docker-Env/results_holo_gpt54_writer_traces_20260607_031517/pyautogui/screenshot/Hcompany/Holotron-3-Nano
+    - GUI-Docker-Env/results/results_holo_gpt54_writer_traces_20260607_031517/pyautogui/screenshot/Hcompany/Holotron-3-Nano
   task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
   sample_mode: per_step
 ```

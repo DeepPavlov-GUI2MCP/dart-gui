@@ -7,7 +7,7 @@ train_sft:
   dataset:
     format: uitars_trace
     trace_roots:
-      - GUI-Docker-Env/results_uitars15_writer_full_20260530_143529/pyautogui/screenshot/ui_tars_1.5
+      - GUI-Docker-Env/results/results_uitars15_writer_full_20260530_143529/pyautogui/screenshot/ui_tars_1.5
     task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
     sample_mode: per_step
     history_n: 5

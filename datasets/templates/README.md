@@ -2,7 +2,7 @@
 
 ## UI-TARS trace SFT
 
-Writer/eval rollouts under `GUI-Docker-Env/results_uitars15_writer_*` contain:
+Writer/eval rollouts under `GUI-Docker-Env/results/results_uitars15_writer_*` contain:
 
 - `traj.jsonl` with `step_num`, `response`, and `screenshot_file`
 - PNG screenshots beside the trajectory (`screenshot_file` for step 1 is the initial desktop state)
@@ -14,7 +14,7 @@ See `training/configs/sft_example.yml` and `.cursor/skills/train-sft/SKILL.md`.
 
 ## Holo trace SFT
 
-Holo eval rollouts under `GUI-Docker-Env/results_holo_gpt54_writer_traces_*` include preflight artifact rows plus agent steps with Holo Step JSON in `response`.
+Holo eval rollouts under `GUI-Docker-Env/results/results_holo_gpt54_writer_traces_*` include preflight artifact rows plus agent steps with Holo Step JSON in `response`.
 
 Set `trace_source: holo` (or `auto`) and use `training/configs/sft_holo_example.yml`. The builder converts Holo JSON to UI-TARS labels and maps pre-action screenshots across preflight and post-action agent rows.
 
