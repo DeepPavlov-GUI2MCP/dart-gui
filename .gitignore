@@ -180,6 +180,7 @@ tests/osworld/
 scripts/*
 !scripts/sanity_check.py
 !scripts/augment_holo_preflight_traces.py
+!scripts/replace_trace_goals.py
 .cursor/plans/
 .cursor/agents/
 .cursor/skills/enable-amnezia-vpn/

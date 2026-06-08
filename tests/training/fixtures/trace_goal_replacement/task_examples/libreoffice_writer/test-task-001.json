@@ -1,0 +1,28 @@
+{
+  "id": "test-task-001",
+  "snapshot": "libreoffice_writer",
+  "instruction": "Open Formula from the New submenu.",
+  "config": [
+    {
+      "type": "a11y_preflight",
+      "parameters": {
+        "steps": [
+          {
+            "op": "wait_for",
+            "selector": {
+              "role": "frame",
+              "name_contains": "LibreOffice Writer"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "evaluator": {
+    "func": "always_dummy"
+  },
+  "synthetic": {
+    "generation_run": "__GENERATION_RUN__",
+    "task_index": 0
+  }
+}

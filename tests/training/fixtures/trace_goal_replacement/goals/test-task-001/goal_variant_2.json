@@ -1,0 +1,7 @@
+{
+  "id": "test-task-001",
+  "variant_index": 2,
+  "task_index": 0,
+  "goal": "Start a LibreOffice Math file",
+  "expected_outcome": "A formula document opens."
+}

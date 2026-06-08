@@ -1,0 +1,9 @@
+{
+  "id": "test-task-no-goals",
+  "snapshot": "libreoffice_writer",
+  "instruction": "Task without generated goals.",
+  "config": [],
+  "synthetic": {
+    "generation_run": "/nonexistent/generation/run"
+  }
+}

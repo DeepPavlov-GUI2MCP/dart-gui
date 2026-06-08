@@ -1,0 +1,9 @@
+{
+  "id": "different-id",
+  "snapshot": "libreoffice_writer",
+  "instruction": "Mismatch task.",
+  "config": [],
+  "synthetic": {
+    "generation_run": "__GENERATION_RUN__"
+  }
+}
