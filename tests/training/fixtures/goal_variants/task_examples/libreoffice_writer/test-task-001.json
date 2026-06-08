@@ -1,0 +1,9 @@
+{
+  "id": "test-task-001",
+  "snapshot": "libreoffice_writer",
+  "instruction": "Open Formula from the New submenu.",
+  "synthetic": {
+    "macro_state_id": "macro-test-001",
+    "task_index": 0
+  }
+}

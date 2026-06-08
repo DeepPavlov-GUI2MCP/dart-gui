@@ -1,0 +1,4 @@
+{"step_num": 1, "action": null, "response": null, "screenshot_file": "step_1_20250101@120000.png"}
+{"step_num": 2, "action": {"phase": "a11y_preflight", "preflight_step_index": 0, "op": "wait_for"}, "response": null, "screenshot_file": "step_2_20250101@120001.png"}
+{"step_num": 3, "action": "pyautogui.click(100,200)", "response": "{\"thought\": \"Click the menu.\", \"tool_call\": {\"tool_name\": \"click\", \"element\": \"Help menu\", \"x\": 100, \"y\": 200, \"button\": \"left\"}}", "screenshot_file": "step_3_20250101@120002.png"}
+{"step_num": 4, "action": "DONE", "response": "{\"thought\": \"Finish the task.\", \"tool_call\": {\"tool_name\": \"answer\", \"content\": \"done\"}}", "screenshot_file": "step_4_20250101@120003.png"}

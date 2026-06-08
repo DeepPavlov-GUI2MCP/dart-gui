@@ -14,9 +14,18 @@ from typing import Any, Sequence
 
 import torch
 
-from build_uitars_sft_dataset import cache_name, load_trace_scan_settings, stage_trace_dataset
+from build_uitars_sft_dataset import (
+    cache_name,
+    load_model_settings,
+    load_trace_scan_settings,
+    pretokenized_cache_dir_name,
+    stage_trace_dataset,
+)
+from goal_variant_pretokenize import GoalVariantPretokenizeCaches, expand_row_with_goal_variants
+from goal_variants import GoalVariant, assert_tasks_have_goal_variants, task_examples_path, task_generation_path
 from uitars_collator import tokenize_uitars_messages
 from uitars_format import UitarsFormatSettings, resolve_staged_messages
+from uitars_trace_dataset import TraceScanSettings
 
 
 LOGGER = logging.getLogger("pretokenize_uitars_sft")
@@ -27,6 +36,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 class WorkerSummary:
     worker_id: int
     rows: int
+    expanded_rows: int
     input_tokens: int
     label_tokens: int
     processor_load_s: float
@@ -111,6 +121,40 @@ def partition_rows(
     return shards
 
 
+def serialize_goal_catalog(catalog: dict[str, list[GoalVariant]]) -> dict[str, list[dict[str, Any]]]:
+    return {
+        task_id: [
+            {
+                "variant_index": variant.variant_index,
+                "goal": variant.goal,
+                "expected_outcome": variant.expected_outcome,
+                "task_id": variant.task_id,
+                "source_path": str(variant.source_path),
+                "task_index": variant.task_index,
+            }
+            for variant in variants
+        ]
+        for task_id, variants in catalog.items()
+    }
+
+
+def deserialize_goal_catalog(payload: dict[str, list[dict[str, Any]]]) -> dict[str, list[GoalVariant]]:
+    catalog: dict[str, list[GoalVariant]] = {}
+    for task_id, variants in payload.items():
+        catalog[task_id] = [
+            GoalVariant(
+                variant_index=int(item["variant_index"]),
+                goal=str(item["goal"]),
+                expected_outcome=str(item["expected_outcome"]),
+                task_id=str(item["task_id"]),
+                source_path=Path(str(item["source_path"])),
+                task_index=item.get("task_index"),
+            )
+            for item in variants
+        ]
+    return catalog
+
+
 def pretokenize_worker(
     worker_id: int,
     rows: list[tuple[int, dict[str, Any]]],
@@ -120,6 +164,8 @@ def pretokenize_worker(
     local_files_only: bool,
     output_dir: str | None,
     no_save: bool,
+    *,
+    goal_catalog: dict[str, list[dict[str, Any]]] | None,
 ) -> WorkerSummary:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     from transformers import AutoProcessor
@@ -138,9 +184,35 @@ def pretokenize_worker(
     label_tokens = 0
     resolve_s = 0.0
     tokenize_s = 0.0
+    expanded_rows = 0
+    variant_catalog = deserialize_goal_catalog(goal_catalog) if goal_catalog else None
+    variant_caches = GoalVariantPretokenizeCaches() if variant_catalog else None
 
     for row_index, row in rows:
         rollout_dir = Path(row["rollout_dir"])
+        if variant_catalog is not None and variant_caches is not None:
+            task_id = row.get("task_id")
+            if not isinstance(task_id, str) or task_id not in variant_catalog:
+                continue
+            resolve_start = time.perf_counter()
+            expanded = expand_row_with_goal_variants(
+                processor,
+                row,
+                variant_catalog[task_id],
+                settings,
+                variant_caches,
+            )
+            resolve_s += time.perf_counter() - resolve_start
+            tokenize_s += 0.0
+            for record in expanded:
+                batch = record["features"]
+                input_tokens += int(batch["input_ids"].numel())
+                label_tokens += int((batch["labels"] != -100).sum().item())
+                if not no_save:
+                    records.append({"row_index": row_index, **record})
+                expanded_rows += 1
+            continue
+
         resolve_start = time.perf_counter()
         messages = resolve_staged_messages(row["messages"], rollout_dir, settings, image_cache)
         resolve_s += time.perf_counter() - resolve_start
@@ -155,6 +227,7 @@ def pretokenize_worker(
 
         input_tokens += int(batch["input_ids"].numel())
         label_tokens += int((batch["labels"] != -100).sum().item())
+        expanded_rows += 1
         if not no_save:
             records.append(
                 {
@@ -180,6 +253,7 @@ def pretokenize_worker(
     return WorkerSummary(
         worker_id=worker_id,
         rows=len(rows),
+        expanded_rows=expanded_rows,
         input_tokens=input_tokens,
         label_tokens=label_tokens,
         processor_load_s=processor_load_s,
@@ -190,6 +264,27 @@ def pretokenize_worker(
     )
 
 
+def write_manifest(
+    output_dir: Path,
+    *,
+    settings: TraceScanSettings,
+    base_rows: int,
+    expanded_rows: int,
+    task_count: int,
+    variants_per_task: int,
+) -> None:
+    manifest = {
+        "goal_variants": settings.goal_variants,
+        "max_goal_variants": settings.max_goal_variants,
+        "task_generation_root": settings.task_generation_root,
+        "base_rows": base_rows,
+        "expanded_rows": expanded_rows,
+        "tasks": task_count,
+        "variants_per_task": variants_per_task,
+    }
+    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     configure_logging(args.log_level)
@@ -198,6 +293,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     LOGGER.info("[preparation] loading config")
     config_start = time.perf_counter()
     settings, datasets_dir, config_refresh = load_trace_scan_settings(args.config)
+    base_model, trust_remote_code = load_model_settings(args.config)
     LOGGER.info("[preparation] config loaded in %.3fs", time.perf_counter() - config_start)
 
     LOGGER.info("[preparation] staging dataset if needed")
@@ -209,6 +305,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     load_start = time.perf_counter()
     indexed_rows = load_rows(data_path, max_rows=args.max_rows, sort_by_cost=args.sort_by_cost)
     LOGGER.info("[preparation] loaded rows=%d in %.3fs", len(indexed_rows), time.perf_counter() - load_start)
+
+    goal_catalog_payload: dict[str, list[dict[str, Any]]] | None = None
+    if settings.goal_variants:
+        if not settings.task_generation_root:
+            raise ValueError("`dataset.task_generation_root` is required when goal_variants is enabled.")
+        rows_only = [row for _, row in indexed_rows]
+        catalog = assert_tasks_have_goal_variants(
+            task_generation_path(settings.task_generation_root),
+            task_examples_path(settings),
+            rows_only,
+            max_variants=settings.max_goal_variants,
+        )
+        goal_catalog_payload = serialize_goal_catalog(catalog)
+        LOGGER.info(
+            "[preparation] goal variants enabled tasks=%d variants_per_task=%d",
+            len(catalog),
+            settings.max_goal_variants,
+        )
 
     worker_count = max(1, min(args.workers, len(indexed_rows)))
     LOGGER.info("[preparation] partitioning rows workers=%d", worker_count)
@@ -222,7 +336,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     output_dir = args.output_dir
     if output_dir is None and not args.no_save:
-        output_dir = str(data_path.parent / f"pretokenized-{cache_name(settings)}")
+        output_dir = str(data_path.parent / pretokenized_cache_dir_name(settings))
 
     LOGGER.info("[data] starting workers no_save=%s output_dir=%s", args.no_save, output_dir)
     data_start = time.perf_counter()
@@ -234,11 +348,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 worker_id,
                 shard,
                 settings.uitars,
-                "ByteDance-Seed/UI-TARS-1.5-7B",
-                True,
+                base_model,
+                trust_remote_code,
                 not args.allow_remote,
                 output_dir,
                 args.no_save,
+                goal_catalog=goal_catalog_payload,
             )
             for worker_id, shard in enumerate(shards)
             if shard
@@ -247,10 +362,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             summary = future.result()
             summaries.append(summary)
             LOGGER.info(
-                "[data] worker=%d rows=%d prep.processor_load_s=%.3f data.resolve_s=%.3f "
-                "data.tokenize_s=%.3f data.save_s=%.3f input_tokens=%d label_tokens=%d output=%s",
+                "[data] worker=%d rows=%d expanded_rows=%d prep.processor_load_s=%.3f "
+                "data.resolve_s=%.3f data.tokenize_s=%.3f data.save_s=%.3f input_tokens=%d "
+                "label_tokens=%d output=%s",
                 summary.worker_id,
                 summary.rows,
+                summary.expanded_rows,
                 summary.processor_load_s,
                 summary.resolve_s,
                 summary.tokenize_s,
@@ -261,7 +378,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
     data_s = time.perf_counter() - data_start
-    rows = sum(summary.rows for summary in summaries)
+    base_rows = sum(summary.rows for summary in summaries)
+    expanded_rows = sum(summary.expanded_rows for summary in summaries)
     input_tokens = sum(summary.input_tokens for summary in summaries)
     label_tokens = sum(summary.label_tokens for summary in summaries)
     processor_load_s = sum(summary.processor_load_s for summary in summaries)
@@ -269,12 +387,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     tokenize_s = sum(summary.tokenize_s for summary in summaries)
     save_s = sum(summary.save_s for summary in summaries)
 
+    if output_dir is not None and not args.no_save and settings.goal_variants:
+        write_manifest(
+            Path(output_dir),
+            settings=settings,
+            base_rows=base_rows,
+            expanded_rows=expanded_rows,
+            task_count=len(goal_catalog_payload or {}),
+            variants_per_task=settings.max_goal_variants,
+        )
+
     LOGGER.info(
-        "[summary] rows=%d workers=%d wall_s=%.3f preparation_plus_data_s=%.3f "
+        "[summary] base_rows=%d expanded_rows=%d workers=%d wall_s=%.3f preparation_plus_data_s=%.3f "
         "worker_prep.processor_load_s=%.3f worker_data.resolve_s=%.3f "
         "worker_data.tokenize_s=%.3f worker_data.save_s=%.3f input_tokens=%d "
         "label_tokens=%d input_tokens_per_wall_s=%.1f",
-        rows,
+        base_rows,
+        expanded_rows,
         worker_count,
         data_s,
         time.perf_counter() - total_start,

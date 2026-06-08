@@ -116,6 +116,16 @@ def load_trace_scan_settings(config_path: str) -> tuple[TraceScanSettings, Path,
             raise ValueError("`dataset.max_preflight_steps` must be an integer.")
         max_preflight_steps = max_preflight_steps_raw
 
+    goal_variants = get_optional_bool(dataset_cfg, "goal_variants", False)
+    max_goal_variants = get_optional_int(dataset_cfg, "max_goal_variants", 1)
+    task_generation_root = get_optional_str(dataset_cfg, "task_generation_root")
+    pretokenized_traces_dir = get_optional_str(dataset_cfg, "pretokenized_traces_dir")
+    if goal_variants:
+        if max_goal_variants < 1:
+            raise ValueError("`dataset.max_goal_variants` must be at least 1 when goal_variants is enabled.")
+        if not task_generation_root:
+            raise ValueError("`dataset.task_generation_root` is required when `dataset.goal_variants` is true.")
+
     settings = TraceScanSettings(
         trace_roots=trace_roots,
         task_examples_dir=task_examples_dir,
@@ -128,6 +138,10 @@ def load_trace_scan_settings(config_path: str) -> tuple[TraceScanSettings, Path,
         trace_root=trace_root,
         max_rollouts=max_rollouts,
         max_preflight_steps=max_preflight_steps,
+        goal_variants=goal_variants,
+        max_goal_variants=max_goal_variants,
+        task_generation_root=task_generation_root,
+        pretokenized_traces_dir=pretokenized_traces_dir,
     )
     datasets_dir = repo_path(get_optional_str(output_cfg, "datasets_dir", "datasets/runtime") or "datasets/runtime")
     refresh = get_optional_bool(dataset_cfg, "refresh", False)
@@ -147,6 +161,9 @@ def cache_name(settings: TraceScanSettings) -> str:
             "trace_root": settings.trace_root,
             "max_rollouts": settings.max_rollouts,
             "max_preflight_steps": settings.max_preflight_steps,
+            "goal_variants": settings.goal_variants,
+            "max_goal_variants": settings.max_goal_variants,
+            "task_generation_root": settings.task_generation_root,
             "uitars": {
                 "prompt_style": settings.uitars.prompt_style,
                 "infer_mode": settings.uitars.infer_mode,
@@ -159,6 +176,23 @@ def cache_name(settings: TraceScanSettings) -> str:
     )
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
     return f"uitars-traces-{digest}"
+
+
+def pretokenized_cache_dir_name(settings: TraceScanSettings) -> str:
+    return f"pretokenized-{cache_name(settings)}"
+
+
+def load_model_settings(config_path: str) -> tuple[str, bool]:
+    path = Path(config_path).expanduser().resolve()
+    with open(path, encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+    root = payload.get("train_sft", payload)
+    model_cfg = get_mapping(root, "model")
+    base_model = get_optional_str(model_cfg, "base_model")
+    if not base_model:
+        raise ValueError("`model.base_model` is required in config.")
+    trust_remote_code = get_optional_bool(model_cfg, "trust_remote_code", True)
+    return base_model, trust_remote_code
 
 
 def stage_trace_dataset(settings: TraceScanSettings, datasets_dir: Path, *, refresh: bool) -> Path:

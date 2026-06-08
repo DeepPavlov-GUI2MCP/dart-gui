@@ -13,7 +13,12 @@ import yaml
 
 from build_uitars_sft_dataset import cache_name as uitars_cache_name
 from build_uitars_sft_dataset import stage_trace_dataset
-from uitars_collator import UitarsTraceDataset, make_uitars_data_collator
+from uitars_collator import (
+    PretokenizedUitarsDataset,
+    UitarsTraceDataset,
+    make_pretokenized_collator,
+    make_uitars_data_collator,
+)
 from uitars_format import UitarsFormatSettings
 from uitars_trace_dataset import TraceScanSettings, build_trace_dataset_rows
 
@@ -62,6 +67,10 @@ class DatasetSettings:
     trace_root: str | None = None
     max_rollouts: int | None = None
     max_preflight_steps: int | None = None
+    goal_variants: bool = False
+    max_goal_variants: int = 1
+    task_generation_root: str | None = None
+    pretokenized_traces_dir: str | None = None
     uitars: UitarsFormatSettings = field(default_factory=UitarsFormatSettings)
 
 
@@ -151,13 +160,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hf_api_key", type=str, default=None)
     parser.add_argument("--no_push_to_hub", action="store_true", default=False)
     parser.add_argument("--output_dir", type=str, default="outputs/sft")
+    parser.add_argument(
+        "--from-pretokenized-traces",
+        type=str,
+        default=None,
+        help="Train from pretokenized shard directory instead of staging/tokenizing traces.",
+    )
     return parser
 
 
 def reject_mixed_config_usage(parser: argparse.ArgumentParser, argv: Sequence[str], args: argparse.Namespace) -> None:
     if not args.config:
         return
-    allowed = {"--config", "--dry-run", "--skip-hf-validation"}
+    allowed = {"--config", "--dry-run", "--skip-hf-validation", "--from-pretokenized-traces"}
     option_names = [token.split("=", 1)[0] for token in argv if token.startswith("--")]
     disallowed = [name for name in option_names if name not in allowed]
     if disallowed:
@@ -252,6 +267,13 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
             raise ValueError("`dataset.max_preflight_steps` must be an integer.")
         max_preflight_steps = max_preflight_steps_raw
 
+    goal_variants = get_optional_bool(dataset_cfg, "goal_variants", False)
+    max_goal_variants = get_optional_int(dataset_cfg, "max_goal_variants", 1)
+    task_generation_root = get_optional_str(dataset_cfg, "task_generation_root")
+    pretokenized_traces_dir = get_optional_str(dataset_cfg, "pretokenized_traces_dir")
+    if goal_variants and not task_generation_root:
+        raise ValueError("`dataset.task_generation_root` is required when `dataset.goal_variants` is true.")
+
     repo_id = get_optional_str(dataset_cfg, "repo_id")
     if dataset_format == "chat":
         if not repo_id:
@@ -291,6 +313,10 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         trace_root=trace_root,
         max_rollouts=max_rollouts,
         max_preflight_steps=max_preflight_steps,
+        goal_variants=goal_variants,
+        max_goal_variants=max_goal_variants,
+        task_generation_root=task_generation_root,
+        pretokenized_traces_dir=pretokenized_traces_dir,
         uitars=uitars,
     )
 
@@ -399,6 +425,10 @@ def stage_dataset(config: ResolvedConfig, *, dry_run: bool = False) -> Path:
             trace_root=config.dataset.trace_root,
             max_rollouts=config.dataset.max_rollouts,
             max_preflight_steps=config.dataset.max_preflight_steps,
+            goal_variants=config.dataset.goal_variants,
+            max_goal_variants=config.dataset.max_goal_variants,
+            task_generation_root=config.dataset.task_generation_root,
+            pretokenized_traces_dir=config.dataset.pretokenized_traces_dir,
         )
         data_path = config.datasets_dir / uitars_cache_name(scan_settings) / "data.jsonl"
         if dry_run:
@@ -573,8 +603,17 @@ def load_model_and_processor(config: ResolvedConfig):
     return model, processor, tokenizer, peft_config
 
 
-def print_dry_run_summary(config: ResolvedConfig, data_path: Path, sft_config: Any) -> None:
-    print(f"Staged dataset: {data_path}")
+def print_dry_run_summary(
+    config: ResolvedConfig,
+    data_path: Path | None,
+    sft_config: Any,
+    *,
+    pretokenized_dir: Path | None = None,
+) -> None:
+    if pretokenized_dir is not None:
+        print(f"Pretokenized dataset: {pretokenized_dir}")
+    else:
+        print(f"Staged dataset: {data_path}")
     print(f"Dataset format: {config.dataset.format}")
     print(f"Output dir: {config.output_dir}")
     print(f"Base model: {config.model.base_model}")
@@ -584,14 +623,28 @@ def print_dry_run_summary(config: ResolvedConfig, data_path: Path, sft_config: A
     print(f"Training: {sft_config}")
 
 
-def train(config: ResolvedConfig, data_path: Path) -> None:
+def train(
+    config: ResolvedConfig,
+    data_path: Path | None = None,
+    *,
+    pretokenized_dir: Path | None = None,
+) -> None:
     from trl import SFTTrainer
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
     sft_config = build_sft_config(config)
     model, processor, tokenizer, peft_config = load_model_and_processor(config)
 
-    if config.dataset.format == "uitars_trace":
+    if pretokenized_dir is not None:
+        train_dataset = PretokenizedUitarsDataset(pretokenized_dir)
+        pad_token_id = processor.tokenizer.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = processor.tokenizer.eos_token_id
+        data_collator = make_pretokenized_collator(pad_token_id)
+        processing_class = processor
+    elif config.dataset.format == "uitars_trace":
+        if data_path is None:
+            raise ValueError("data_path is required for uitars_trace training.")
         train_dataset = UitarsTraceDataset(data_path, config.dataset.uitars)
         data_collator = make_uitars_data_collator(processor)
         processing_class = processor
@@ -634,6 +687,14 @@ def dataset_cache_name(dataset: DatasetSettings) -> str:
             min_result=dataset.min_result,
             trace_source=dataset.trace_source,  # type: ignore[arg-type]
             uitars=dataset.uitars,
+            preflight_augmented_path=dataset.preflight_augmented_path,
+            trace_root=dataset.trace_root,
+            max_rollouts=dataset.max_rollouts,
+            max_preflight_steps=dataset.max_preflight_steps,
+            goal_variants=dataset.goal_variants,
+            max_goal_variants=dataset.max_goal_variants,
+            task_generation_root=dataset.task_generation_root,
+            pretokenized_traces_dir=dataset.pretokenized_traces_dir,
         )
         return uitars_cache_name(scan_settings)
     if not dataset.repo_id:
@@ -733,8 +794,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = load_config_file(args.config) if args.config else resolve_args(args)
     configure_hf_env(config)
     validate_hub_write(config, skip=args.skip_hf_validation)
-    data_path = stage_dataset(config, dry_run=args.dry_run)
+    pretokenized_dir: Path | None = None
+    if args.from_pretokenized_traces:
+        pretokenized_dir = repo_path(args.from_pretokenized_traces)
+    elif config.dataset.pretokenized_traces_dir:
+        pretokenized_dir = repo_path(config.dataset.pretokenized_traces_dir)
     sft_config = build_sft_config(config)
+    if pretokenized_dir is not None:
+        if args.dry_run:
+            print_dry_run_summary(config, None, sft_config, pretokenized_dir=pretokenized_dir)
+            return 0
+        train(config, pretokenized_dir=pretokenized_dir)
+        return 0
+    data_path = stage_dataset(config, dry_run=args.dry_run)
     if args.dry_run:
         print_dry_run_summary(config, data_path, sft_config)
         return 0

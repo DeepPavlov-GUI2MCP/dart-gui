@@ -48,6 +48,10 @@ class TraceScanSettings:
     trace_root: str | None = None
     max_rollouts: int | None = None
     max_preflight_steps: int | None = None
+    goal_variants: bool = False
+    max_goal_variants: int = 1
+    task_generation_root: str | None = None
+    pretokenized_traces_dir: str | None = None
 
 
 def repo_path(value: str) -> Path:

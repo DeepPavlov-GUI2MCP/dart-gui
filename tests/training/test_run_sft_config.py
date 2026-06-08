@@ -13,6 +13,7 @@ SFT_CONFIG = REPO_ROOT / "training" / "configs" / "sft_example.yml"
 SFT_CHAT_CONFIG = REPO_ROOT / "training" / "configs" / "sft_example_chat.yml"
 SFT_FIXTURE_CONFIG = REPO_ROOT / "training" / "configs" / "sft_fixture.yml"
 SFT_HOLO_FIXTURE_CONFIG = REPO_ROOT / "training" / "configs" / "sft_holo_fixture.yml"
+SFT_GOAL_VARIANTS_CONFIG = REPO_ROOT / "training" / "configs" / "sft_holo_goal_variants_fixture.yml"
 FIXTURE_ROLLOUT = (
     REPO_ROOT
     / "tests/training/fixtures/uitars_trace/rollout/libreoffice_writer/test-task-id"
@@ -169,10 +170,17 @@ def test_collator_masks_labels_outside_last_assistant():
 
     uitars_collator = import_training_module("uitars_collator")
     processor = MagicMock()
-    processor.apply_chat_template.side_effect = [
-        {"input_ids": torch.tensor([[1, 2, 3, 4, 5, 6, 7]])},
-        {"input_ids": torch.tensor([[1, 2, 3, 4]])},
-    ]
+
+    def apply_chat_template(messages, **kwargs):
+        if kwargs.get("tokenize") is True:
+            return {"input_ids": torch.tensor([[1, 2, 3, 4, 5, 6, 7]])}
+        return "x" * (4 if len(messages) <= 2 else 7)
+
+    processor.apply_chat_template.side_effect = apply_chat_template
+    processor.tokenizer.side_effect = lambda text, **kwargs: {
+        "input_ids": list(range(len(text)))
+    }
+    processor.tokenizer.convert_tokens_to_ids.return_value = 99
     messages = [
         {"role": "user", "content": [{"type": "text", "text": "hello"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "old"}]},
@@ -225,6 +233,19 @@ def test_dry_run_subprocess_example_config():
     )
     assert result.returncode == 0, result.stderr
     assert "Dataset format: uitars_trace" in result.stdout
+
+
+def test_resolve_goal_variants_config_from_fixture():
+    run_sft = import_training_module("run_sft")
+    config = run_sft.load_config_file(str(SFT_GOAL_VARIANTS_CONFIG))
+    assert config.dataset.goal_variants is True
+    assert config.dataset.max_goal_variants == 1
+    assert config.dataset.task_generation_root.endswith(
+        "tests/training/fixtures/goal_variants/task_generation"
+    )
+    assert config.dataset.pretokenized_traces_dir.endswith(
+        "tests/training/fixtures/pretokenized_shards"
+    )
 
 
 def test_dry_run_subprocess_holo_fixture():

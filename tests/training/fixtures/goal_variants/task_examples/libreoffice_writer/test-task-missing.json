@@ -1,0 +1,9 @@
+{
+  "id": "test-task-missing",
+  "snapshot": "libreoffice_writer",
+  "instruction": "Missing goal variants.",
+  "synthetic": {
+    "macro_state_id": "macro-missing",
+    "task_index": 0
+  }
+}

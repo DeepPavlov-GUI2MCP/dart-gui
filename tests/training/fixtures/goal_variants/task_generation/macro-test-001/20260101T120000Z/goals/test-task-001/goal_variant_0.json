@@ -1,0 +1,7 @@
+{
+  "id": "test-task-001",
+  "variant_index": 0,
+  "task_index": 0,
+  "goal": "Old stale goal variant",
+  "expected_outcome": "Should not be selected."
+}

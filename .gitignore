@@ -1,5 +1,6 @@
 *.csv
 **/*.pt
+!tests/training/fixtures/pretokenized_shards/shard-00000.pt
 **/checkpoints
 **/wget-log
 **/_build/
@@ -180,7 +181,6 @@ tests/osworld/
 scripts/*
 !scripts/sanity_check.py
 !scripts/augment_holo_preflight_traces.py
-!scripts/replace_trace_goals.py
 .cursor/plans/
 .cursor/agents/
 .cursor/skills/enable-amnezia-vpn/

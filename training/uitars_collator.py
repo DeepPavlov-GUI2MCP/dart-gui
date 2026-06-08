@@ -213,3 +213,65 @@ def make_uitars_data_collator(processor: Any) -> Callable[[list[dict[str, Any]]]
         return merged
 
     return collate
+
+
+class PretokenizedUitarsDataset(Dataset):
+    def __init__(self, pretokenized_dir: Path) -> None:
+        self.records: list[dict[str, Any]] = []
+        for shard_path in sorted(Path(pretokenized_dir).glob("shard-*.pt")):
+            payload = torch.load(shard_path, weights_only=False)
+            if isinstance(payload, list):
+                self.records.extend(item for item in payload if isinstance(item, dict))
+        if not self.records:
+            raise ValueError(f"No pretokenized records found under {pretokenized_dir}")
+
+    def __len__(self) -> int:
+        return len(self.records)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        record = self.records[index]
+        features = record.get("features")
+        if not isinstance(features, dict):
+            raise ValueError("Pretokenized record is missing features.")
+        return {"features": features}
+
+
+def pad_feature_batch(
+    features: list[dict[str, torch.Tensor]],
+    *,
+    pad_token_id: int,
+) -> dict[str, torch.Tensor]:
+    max_len = max(feature["input_ids"].shape[-1] for feature in features)
+    batch_tensors: dict[str, list[torch.Tensor]] = {}
+    for feature in features:
+        seq_len = feature["input_ids"].shape[-1]
+        pad_len = max_len - seq_len
+        for key, value in feature.items():
+            if key == "input_ids":
+                padded = torch.nn.functional.pad(value, (0, pad_len), value=pad_token_id)
+            elif key == "labels":
+                padded = torch.nn.functional.pad(value, (0, pad_len), value=-100)
+            elif key == "attention_mask":
+                padded = torch.nn.functional.pad(value, (0, pad_len), value=0)
+            elif key in VISION_BATCH_KEYS:
+                padded = normalize_vision_feature(key, value)
+            elif isinstance(value, torch.Tensor) and value.ndim == 1:
+                padded = torch.nn.functional.pad(value, (0, pad_len), value=0)
+            else:
+                padded = value
+            batch_tensors.setdefault(key, []).append(padded)
+    merged: dict[str, torch.Tensor] = {}
+    for key, values in batch_tensors.items():
+        if key in VISION_BATCH_KEYS:
+            merged[key] = merge_vision_features(key, values)
+        else:
+            merged[key] = torch.stack(values)
+    return merged
+
+
+def make_pretokenized_collator(pad_token_id: int) -> Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]]:
+    def collate(batch: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
+        features = [item["features"] for item in batch]
+        return pad_feature_batch(features, pad_token_id=pad_token_id)
+
+    return collate
