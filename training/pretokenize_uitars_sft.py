@@ -45,6 +45,27 @@ class WorkerSummary:
     tokenize_s: float
     save_s: float
     output_path: str | None
+    chunk_count: int
+
+
+def shard_path_for_chunk(output_dir: Path, worker_id: int, chunk_idx: int, *, chunked: bool) -> Path:
+    if chunked:
+        return output_dir / f"shard-{worker_id:05d}-{chunk_idx:05d}.pt"
+    return output_dir / f"shard-{worker_id:05d}.pt"
+
+
+def save_record_chunk(
+    records: list[dict[str, Any]],
+    output_dir: Path,
+    *,
+    worker_id: int,
+    chunk_idx: int,
+    chunked: bool,
+) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    shard_path = shard_path_for_chunk(output_dir, worker_id, chunk_idx, chunked=chunked)
+    torch.save(records, shard_path)
+    return shard_path
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -66,6 +87,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Shard rows by per-step budget (default) or keep whole rollouts together.",
     )
     parser.add_argument("--no-save", action="store_true", help="Benchmark tokenization without writing shards.")
+    parser.add_argument(
+        "--flush-every",
+        type=int,
+        default=32,
+        help="Write and clear in-memory records every N expanded rows (0 = one shard per worker).",
+    )
     parser.add_argument(
         "--allow-remote",
         action="store_true",
@@ -190,6 +217,7 @@ def pretokenize_worker(
     local_files_only: bool,
     output_dir: str | None,
     no_save: bool,
+    flush_every: int,
     *,
     goal_catalog: dict[str, list[dict[str, Any]]] | None,
 ) -> WorkerSummary:
@@ -210,9 +238,38 @@ def pretokenize_worker(
     label_tokens = 0
     resolve_s = 0.0
     tokenize_s = 0.0
+    save_s = 0.0
     expanded_rows = 0
+    chunk_idx = 0
+    chunk_count = 0
+    output_path: str | None = None
+    chunked_save = flush_every > 0
+    flush_threshold = flush_every if chunked_save else 0
+    output = Path(output_dir) if output_dir is not None else None
     variant_catalog = deserialize_goal_catalog(goal_catalog) if goal_catalog else None
     variant_caches = GoalVariantPretokenizeCaches() if variant_catalog else None
+
+    def flush_records(*, final: bool = False) -> None:
+        nonlocal chunk_idx, chunk_count, save_s, output_path
+        if no_save or output is None or not records:
+            records.clear()
+            return
+        if not final:
+            if not chunked_save or len(records) < flush_threshold:
+                return
+        save_start = time.perf_counter()
+        shard_path = save_record_chunk(
+            records,
+            output,
+            worker_id=worker_id,
+            chunk_idx=chunk_idx,
+            chunked=chunked_save,
+        )
+        save_s += time.perf_counter() - save_start
+        records.clear()
+        output_path = str(shard_path)
+        chunk_count += 1
+        chunk_idx += 1
 
     for row_index, row in rows:
         rollout_dir = Path(row["rollout_dir"])
@@ -237,6 +294,8 @@ def pretokenize_worker(
                 if not no_save:
                     records.append({"row_index": row_index, **record})
                 expanded_rows += 1
+                if not no_save:
+                    flush_records()
             continue
 
         resolve_start = time.perf_counter()
@@ -264,17 +323,9 @@ def pretokenize_worker(
                     "features": batch,
                 }
             )
+            flush_records()
 
-    save_s = 0.0
-    output_path = None
-    if not no_save and output_dir is not None:
-        output = Path(output_dir)
-        output.mkdir(parents=True, exist_ok=True)
-        shard_path = output / f"shard-{worker_id:05d}.pt"
-        save_start = time.perf_counter()
-        torch.save(records, shard_path)
-        save_s = time.perf_counter() - save_start
-        output_path = str(shard_path)
+    flush_records(final=True)
 
     return WorkerSummary(
         worker_id=worker_id,
@@ -287,6 +338,7 @@ def pretokenize_worker(
         tokenize_s=tokenize_s,
         save_s=save_s,
         output_path=output_path,
+        chunk_count=chunk_count,
     )
 
 
@@ -372,7 +424,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if output_dir is None and not args.no_save:
         output_dir = str(data_path.parent / pretokenized_cache_dir_name(settings))
 
-    LOGGER.info("[data] starting workers no_save=%s output_dir=%s", args.no_save, output_dir)
+    LOGGER.info(
+        "[data] starting workers no_save=%s flush_every=%d output_dir=%s",
+        args.no_save,
+        args.flush_every,
+        output_dir,
+    )
     data_start = time.perf_counter()
     summaries: list[WorkerSummary] = []
     with ProcessPoolExecutor(max_workers=worker_count) as executor:
@@ -387,6 +444,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 not args.allow_remote,
                 output_dir,
                 args.no_save,
+                args.flush_every,
                 goal_catalog=goal_catalog_payload,
             )
             for worker_id, shard in enumerate(shards)
@@ -396,12 +454,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             summary = future.result()
             summaries.append(summary)
             LOGGER.info(
-                "[data] worker=%d rows=%d expanded_rows=%d prep.processor_load_s=%.3f "
+                "[data] worker=%d rows=%d expanded_rows=%d chunks=%d prep.processor_load_s=%.3f "
                 "data.resolve_s=%.3f data.tokenize_s=%.3f data.save_s=%.3f input_tokens=%d "
                 "label_tokens=%d output=%s",
                 summary.worker_id,
                 summary.rows,
                 summary.expanded_rows,
+                summary.chunk_count,
                 summary.processor_load_s,
                 summary.resolve_s,
                 summary.tokenize_s,

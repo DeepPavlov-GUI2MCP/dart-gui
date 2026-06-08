@@ -6,7 +6,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "training"))
 
-from pretokenize_uitars_sft import partition_rows, row_budget
+from pretokenize_uitars_sft import partition_rows, row_budget, shard_path_for_chunk
 
 
 def _row(rollout: str, images: int) -> tuple[int, dict]:
@@ -25,6 +25,11 @@ def test_partition_steps_balances_budget_across_workers():
     assert [len(shard) for shard in shards] == [6, 6]
     budgets = [sum(row_budget(row) for _, row in shard) for shard in shards]
     assert max(budgets) - min(budgets) <= row_budget(rows[0][1])
+
+
+def test_shard_path_for_chunk_supports_single_and_chunked_names(tmp_path):
+    assert shard_path_for_chunk(tmp_path, 3, 7, chunked=False).name == "shard-00003.pt"
+    assert shard_path_for_chunk(tmp_path, 3, 7, chunked=True).name == "shard-00003-00007.pt"
 
 
 def test_partition_rollouts_keeps_rollout_groups_intact():
