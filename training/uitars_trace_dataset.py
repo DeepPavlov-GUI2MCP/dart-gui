@@ -158,6 +158,26 @@ def holo_converted_responses(rows: list[TrajRow], agent_indices: list[int]) -> l
     return [convert_holo_response(rows[idx].response or "") for idx in agent_indices]
 
 
+def preflight_augmented_observation_paths(
+    rollout_dir: Path,
+    rows: list[TrajRow],
+    augmented_steps: Sequence[AugmentedPreflightStep],
+    step_idx: int,
+) -> list[Path]:
+    index_by_step_num = {row.step_num: idx for idx, row in enumerate(rows)}
+    first_preflight_idx = index_by_step_num.get(augmented_steps[0].step_num)
+    if first_preflight_idx is None:
+        raise ValueError("Augmented preflight trace is missing the first preflight step.")
+    start_idx = 0 if first_preflight_idx == 0 else first_preflight_idx - 1
+    paths: list[Path] = []
+    for offset in range(step_idx + 1):
+        row_idx = start_idx + offset
+        if row_idx < 0 or row_idx >= len(rows):
+            raise ValueError("Augmented preflight trace is missing a pre-action screenshot.")
+        paths.append(rollout_dir / rows[row_idx].screenshot_file)
+    return paths
+
+
 def read_result_score(rollout_dir: Path) -> float | None:
     result_path = rollout_dir / "result.txt"
     if not result_path.is_file():
@@ -333,8 +353,16 @@ def build_holo_preflight_augmented_per_step_rows(
         row = rows[row_idx]
         if not is_preflight_row(row):
             continue
-        image_paths = [rollout_dir / rows[i].screenshot_file for i in range(row_idx)]
-        if not image_paths or not all(path.is_file() for path in image_paths):
+        try:
+            image_paths = preflight_augmented_observation_paths(
+                rollout_dir,
+                rows,
+                augmented_steps,
+                step_idx,
+            )
+        except ValueError:
+            continue
+        if not all(path.is_file() for path in image_paths):
             continue
         messages = build_messages_from_images_and_responses(
             instruction,
@@ -374,8 +402,16 @@ def build_holo_preflight_augmented_full_trajectory_row(
         return None
     if not is_preflight_row(rows[row_idx]):
         return None
-    image_paths = [rollout_dir / rows[i].screenshot_file for i in range(row_idx)]
-    if not image_paths or not all(path.is_file() for path in image_paths):
+    try:
+        image_paths = preflight_augmented_observation_paths(
+            rollout_dir,
+            rows,
+            augmented_steps,
+            len(augmented_steps) - 1,
+        )
+    except ValueError:
+        return None
+    if not all(path.is_file() for path in image_paths):
         return None
     converted = [convert_holo_response(step.response) for step in augmented_steps]
     format_settings = _format_settings(settings)

@@ -1,0 +1,53 @@
+train_sft:
+  model:
+    base_model: ByteDance-Seed/UI-TARS-1.5-7B
+    max_seq_length: 2048
+    trust_remote_code: true
+
+  dataset:
+    format: uitars_trace
+    trace_source: holo
+    preflight_augmented_path: GUI-Docker-Env/results/results_holo_gpt54_writer_traces_20260607_031517/preflight_augmented/openai_api/gpt-5.4/tasks.jsonl
+    task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
+    sample_mode: per_step
+    history_n: 5
+    refresh: true
+    uitars:
+      prompt_style: qwen25vl_normal
+      infer_mode: qwen25vl_normal
+      language: English
+      max_pixels: 12845056
+      min_pixels: 78400
+
+  hf:
+    api_key: ${HUGGINGFACE_API_KEY}
+
+  hub:
+    push_to_hub: false
+
+  output:
+    output_dir: outputs/sft/ui-tars-holo-preflight-full
+    datasets_dir: datasets/runtime
+
+  training:
+    per_device_train_batch_size: 1
+    gradient_accumulation_steps: 2
+    num_train_epochs: 1
+    learning_rate: 0.0002
+    warmup_steps: 10
+    logging_steps: 50
+    save_steps: 500
+    packing: false
+    gradient_checkpointing: true
+    fp16: true
+
+  lora:
+    r: 16
+    alpha: 32
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - down_proj
+      - up_proj
