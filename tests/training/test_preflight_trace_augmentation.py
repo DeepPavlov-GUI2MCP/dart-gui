@@ -278,6 +278,6 @@ def test_skip_existing_augmented_task(tmp_path: Path, oracle_env: None) -> None:
     output_path.write_text("{}", encoding="utf-8")
 
     summary = run_augmentation(settings)
-    assert summary["skipped"] == 1
-    assert summary["results"][0]["status"] == "skipped"
-    assert summary["results"][0]["source"] == "exists"
+    assert summary["pending_tasks"] == 0
+    assert summary["processed"] == 0
+    assert summary["results"] == []

@@ -15,6 +15,7 @@ from urllib import error, request
 
 import requests
 from PIL import Image
+from tqdm import tqdm
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 GUI_DOCKER_ENV = REPO_ROOT / "GUI-Docker-Env"
@@ -105,6 +106,8 @@ class AugmentSettings:
     overwrite: bool = False
     dry_run: bool = False
     write_traces_manifest: bool = False
+    all_tasks: bool = False
+    only_missing: bool = True
 
 
 @dataclass
@@ -554,8 +557,19 @@ def select_manifest_entries(
                 selected.append(entry)
         return selected
     start = max(settings.skip_first_n, 0)
+    if settings.all_tasks:
+        return entries[start:]
     end = start + max(settings.n_tasks, 0)
     return entries[start:end]
+
+
+def filter_entries_needing_augmentation(
+    settings: AugmentSettings,
+    entries: list[TraceManifestEntry],
+) -> list[TraceManifestEntry]:
+    if settings.overwrite or not settings.only_missing:
+        return entries
+    return [entry for entry in entries if not augmented_task_path(settings, entry.task_id).is_file()]
 
 
 def write_augmented_preflight(
@@ -1288,13 +1302,20 @@ def run_augmentation(settings: AugmentSettings) -> dict[str, Any]:
     else:
         entries = load_manifest(settings.trace_root, settings.task_examples_dir)
     selected = select_manifest_entries(entries, settings)
+    pending = filter_entries_needing_augmentation(settings, selected)
 
     results: list[TaskAugmentResult] = []
     failures: list[dict[str, str]] = []
     cache_hits = 0
     llm_calls = 0
     total_cost = 0.0
-    for entry in selected:
+    progress = tqdm(
+        pending,
+        desc=f"Preflight augment [{settings.trace_root.name}]",
+        unit="task",
+        dynamic_ncols=True,
+    )
+    for entry in progress:
         try:
             result = augment_rollout(settings, entry)
             results.append(result)
@@ -1302,6 +1323,12 @@ def run_augmentation(settings: AugmentSettings) -> dict[str, Any]:
                 cache_hits += 1
             llm_calls += result.llm_calls
             total_cost += result.cost_usd
+            progress.set_postfix(
+                ok=sum(1 for item in results if item.status == "ok"),
+                skip=sum(1 for item in results if item.status == "skipped"),
+                fail=len(failures),
+                refresh=False,
+            )
         except Exception as exc:
             failures.append({"task_id": entry.task_id, "error": str(exc)})
 
@@ -1315,6 +1342,7 @@ def run_augmentation(settings: AugmentSettings) -> dict[str, Any]:
         "mode": settings.mode,
         "backend_model": backend_model_for_settings(settings),
         "selected_tasks": len(selected),
+        "pending_tasks": len(pending),
         "processed": processed,
         "skipped": skipped,
         "cache_hits": cache_hits,

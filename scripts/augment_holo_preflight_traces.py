@@ -79,6 +79,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Resolve tasks and cache hits without calling LLMs or writing outputs.",
     )
+    parser.add_argument(
+        "--all-tasks",
+        action="store_true",
+        help="Process all manifest tasks after --skip-first-n (default: only --n-tasks).",
+    )
+    parser.add_argument(
+        "--include-existing",
+        action="store_true",
+        help="Revisit tasks that already have augmented JSON (implies --overwrite for those tasks).",
+    )
     return parser.parse_args()
 
 
@@ -95,9 +105,11 @@ def main() -> int:
         skip_first_n=args.skip_first_n,
         task_ids=tuple(args.task_ids),
         output_dir=output_dir,
-        overwrite=args.overwrite,
+        overwrite=args.overwrite or args.include_existing,
         dry_run=args.dry_run,
         write_traces_manifest=args.write_traces_manifest,
+        all_tasks=args.all_tasks,
+        only_missing=not args.include_existing,
     )
     summary = run_augmentation(settings)
     print(json.dumps(summary, indent=2))
