@@ -37,8 +37,8 @@ def test_resolve_config_from_example():
     config = run_sft.load_config_file(str(SFT_CONFIG))
     assert config.model.base_model == "ByteDance-Seed/UI-TARS-1.5-7B"
     assert config.model.max_seq_length == 2048
-    assert config.training.fp16 is True
-    assert config.training.bf16 is False
+    assert config.training.fp16 is False
+    assert config.training.bf16 is True
     assert config.dataset.format == "uitars_trace"
     assert config.dataset.sample_mode == "per_step"
     assert config.dataset.history_n == 5

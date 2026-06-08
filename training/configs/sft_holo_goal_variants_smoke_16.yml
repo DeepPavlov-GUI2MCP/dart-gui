@@ -45,8 +45,9 @@ train_sft:
     save_steps: 100
     packing: false
     gradient_checkpointing: true
-    fp16: true
-    ddp_find_unused_parameters: true
+    bf16: true
+    fp16: false
+    ddp_find_unused_parameters: false
 
   lora:
     r: 16

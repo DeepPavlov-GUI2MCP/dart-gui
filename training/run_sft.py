@@ -111,8 +111,8 @@ class TrainingSettings:
     weight_decay: float = 0.0
     packing: bool = True
     gradient_checkpointing: bool = True
-    fp16: bool = True
-    bf16: bool = False
+    fp16: bool = False
+    bf16: bool = True
     ddp_find_unused_parameters: bool = False
 
 
@@ -358,8 +358,8 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         weight_decay=get_optional_float(training_cfg, "weight_decay", 0.0),
         packing=get_optional_bool(training_cfg, "packing", True),
         gradient_checkpointing=get_optional_bool(training_cfg, "gradient_checkpointing", True),
-        fp16=get_optional_bool(training_cfg, "fp16", True),
-        bf16=get_optional_bool(training_cfg, "bf16", False),
+        fp16=get_optional_bool(training_cfg, "fp16", False),
+        bf16=get_optional_bool(training_cfg, "bf16", True),
         ddp_find_unused_parameters=get_optional_bool(training_cfg, "ddp_find_unused_parameters", False),
     )
 
@@ -599,6 +599,8 @@ def build_sft_config(config: ResolvedConfig) -> Any:
 
     use_fp16 = config.training.fp16 and torch.cuda.is_available()
     use_bf16 = config.training.bf16 and torch.cuda.is_available()
+    if use_fp16 and use_bf16:
+        use_fp16 = False
     packing = config.training.packing
     if config.dataset.format == "uitars_trace" or is_vision_model(
         config.model.base_model,
@@ -653,6 +655,8 @@ def load_model_and_processor(config: ResolvedConfig):
 
     trust_remote_code = config.model.trust_remote_code
     hf_token = configure_hf_hub(config_token=config.hf.api_key)
+    use_bf16 = config.training.bf16 and torch.cuda.is_available()
+    model_dtype = torch.bfloat16 if use_bf16 else torch.float16
     use_vision = config.dataset.format == "uitars_trace" or is_vision_model(
         config.model.base_model,
         trust_remote_code,
@@ -679,7 +683,7 @@ def load_model_and_processor(config: ResolvedConfig):
         tokenizer.pad_token = tokenizer.eos_token
 
     model_kwargs: dict[str, Any] = {
-        "torch_dtype": torch.float16,
+        "torch_dtype": model_dtype,
     }
     if is_distributed():
         local_rank = get_local_rank()
@@ -730,7 +734,8 @@ def print_dry_run_summary(
     print(f"Output dir: {config.output_dir}")
     print(f"Base model: {config.model.base_model}")
     print(f"Max seq length: {config.model.max_seq_length}")
-    print(f"Model dtype: float16")
+    dtype_label = "bfloat16" if config.training.bf16 else "float16"
+    print(f"Model dtype: {dtype_label}")
     print(f"LoRA r/alpha: {config.lora.r}/{config.lora.alpha}")
     print(f"Training: {sft_config}")
 

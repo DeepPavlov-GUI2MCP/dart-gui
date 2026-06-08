@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import time
+from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,6 +59,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Process the largest image/text rows first; useful for throughput benchmarking.",
     )
+    parser.add_argument(
+        "--partition-mode",
+        choices=("steps", "rollouts"),
+        default="steps",
+        help="Shard rows by per-step budget (default) or keep whole rollouts together.",
+    )
     parser.add_argument("--no-save", action="store_true", help="Benchmark tokenization without writing shards.")
     parser.add_argument(
         "--allow-remote",
@@ -105,13 +112,38 @@ def load_rows(data_path: Path, *, max_rows: int | None, sort_by_cost: bool) -> l
     return rows
 
 
+def row_budget(row: dict[str, Any]) -> int:
+    images, chars = row_cost(row)
+    return images * 1_000_000 + chars
+
+
 def partition_rows(
     indexed_rows: Sequence[tuple[int, dict[str, Any]]],
     workers: int,
+    *,
+    mode: str = "steps",
 ) -> list[list[tuple[int, dict[str, Any]]]]:
-    shards: list[list[tuple[int, dict[str, Any]]]] = [[] for _ in range(workers)]
-    for item_index, item in enumerate(indexed_rows):
-        shards[item_index % workers].append(item)
+    if workers <= 1:
+        return [list(indexed_rows)]
+
+    if mode == "rollouts":
+        groups: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+        for item in indexed_rows:
+            groups[item[1]["rollout_dir"]].append(item)
+        shards: list[list[tuple[int, dict[str, Any]]]] = [[] for _ in range(workers)]
+        shard_budgets = [0 for _ in range(workers)]
+        for group in sorted(groups.values(), key=lambda items: sum(row_budget(row) for _, row in items), reverse=True):
+            shard_idx = min(range(workers), key=shard_budgets.__getitem__)
+            shards[shard_idx].extend(group)
+            shard_budgets[shard_idx] += sum(row_budget(row) for _, row in group)
+        return shards
+
+    shards = [[] for _ in range(workers)]
+    shard_budgets = [0 for _ in range(workers)]
+    for item in sorted(indexed_rows, key=lambda entry: (-row_budget(entry[1]), entry[0])):
+        shard_idx = min(range(workers), key=shard_budgets.__getitem__)
+        shards[shard_idx].append(item)
+        shard_budgets[shard_idx] += row_budget(item[1])
     return shards
 
 
@@ -327,9 +359,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     worker_count = max(1, min(args.workers, len(indexed_rows)))
-    LOGGER.info("[preparation] partitioning rows workers=%d", worker_count)
+    LOGGER.info("[preparation] partitioning rows workers=%d mode=%s", worker_count, args.partition_mode)
     partition_start = time.perf_counter()
-    shards = partition_rows(indexed_rows, worker_count)
+    shards = partition_rows(indexed_rows, worker_count, mode=args.partition_mode)
     LOGGER.info(
         "[preparation] partitioned rows shard_sizes=%s in %.3fs",
         [len(shard) for shard in shards],
