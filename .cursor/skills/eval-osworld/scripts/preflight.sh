@@ -2,8 +2,11 @@
 # Preflight checks before OSWorld UI-TARS eval via dart-rollouter vLLM.
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 VLLM_BASE="${VLLM_BASE:-http://127.0.0.1:8010}"
 DESKTOP_URL="${DESKTOP_URL:-http://127.0.0.1:50003}"
+DESKTOP_HOSTS="${DESKTOP_HOSTS:-${DESKTOP_URL}}"
 MODEL_SERVICE_URL="${MODEL_SERVICE_URL:-http://127.0.0.1:15961}"
 REQUESTED_MODEL="${REQUESTED_MODEL:-ByteDance-Seed/UI-TARS-1.5-7B}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-empty}"
@@ -12,9 +15,15 @@ DESKTOP_TOKEN="${DESKTOP_TOKEN:-dart}"
 
 echo "== OSWorld eval preflight =="
 echo "Requested emulators: ${EMULATOR_COUNT}"
+echo "Desktop hosts: ${DESKTOP_HOSTS}"
 
-# 1) Desktop server + token quota
-echo "[1/5] Desktop server: ${DESKTOP_URL}/ping"
+# 1) Stop emulators and remove orphaned OSWorld containers on every desktop host
+echo "[1/6] Desktop host cleanup"
+DESKTOP_HOSTS="${DESKTOP_HOSTS}" DESKTOP_TOKEN="${DESKTOP_TOKEN}" \
+  bash "${SCRIPT_DIR}/cleanup_desktop_hosts.sh"
+
+# 2) Desktop server + token quota
+echo "[2/6] Desktop server: ${DESKTOP_URL}/ping"
 if ! curl -sf "${DESKTOP_URL}/ping" >/dev/null; then
   echo "FAIL: desktop server not reachable at ${DESKTOP_URL}" >&2
   exit 1
@@ -56,7 +65,7 @@ PY
 echo "Quota: ${quota_ok}"
 
 # 2) dart-rollouter model service (optional but informative)
-echo "[2/5] Model service: ${MODEL_SERVICE_URL}/status"
+echo "[3/6] Model service: ${MODEL_SERVICE_URL}/status"
 if curl -sf "${MODEL_SERVICE_URL}/status" >/dev/null 2>&1; then
   curl -s "${MODEL_SERVICE_URL}/status" | python3 -m json.tool 2>/dev/null || curl -s "${MODEL_SERVICE_URL}/status"
   echo "OK"
@@ -65,7 +74,7 @@ else
 fi
 
 # 3) vLLM health + list models
-echo "[3/5] vLLM health: ${VLLM_BASE}/health"
+echo "[4/6] vLLM health: ${VLLM_BASE}/health"
 code="$(curl -s -o /dev/null -w '%{http_code}' "${VLLM_BASE}/health" || true)"
 if [[ "${code}" != "200" ]]; then
   echo "FAIL: vLLM health returned HTTP ${code} at ${VLLM_BASE}" >&2
@@ -118,7 +127,7 @@ echo "Resolved model id: ${model_id}"
 export RESOLVED_VLLM_MODEL_ID="${model_id}"
 
 # 4) Sanity chat/completions request
-echo "[4/5] Sanity request: POST ${VLLM_BASE}/v1/chat/completions (model=${model_id})"
+echo "[5/6] Sanity request: POST ${VLLM_BASE}/v1/chat/completions (model=${model_id})"
 sanity_payload="$(MODEL_ID="${model_id}" python3 - <<'PY'
 import json, os
 print(json.dumps({
@@ -146,7 +155,7 @@ echo "Sanity response:"
 python3 -m json.tool /tmp/eval_osworld_preflight.json 2>/dev/null | head -20 || cat /tmp/eval_osworld_preflight.json
 
 # 5) Parallel readiness summary
-echo "[5/5] Parallel readiness"
+echo "[6/6] Parallel readiness"
 echo "  max-workers should be: ${EMULATOR_COUNT}"
 echo "  token limit should be:  ${EMULATOR_COUNT} (set via /set_token_limit if needed)"
 echo "  keep SSH tunnel alive for entire run"

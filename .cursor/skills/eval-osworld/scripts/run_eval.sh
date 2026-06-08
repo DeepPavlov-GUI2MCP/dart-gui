@@ -42,6 +42,12 @@ start_eval() {
   local eval_cmd
   eval_cmd="$(resolve_eval_cmd "$@")"
 
+  if [[ "${SKIP_DESKTOP_CLEANUP:-}" != "1" ]]; then
+    DESKTOP_HOSTS="${DESKTOP_HOSTS:-${DESKTOP_URL:-http://127.0.0.1:50003}}" \
+      DESKTOP_TOKEN="${DESKTOP_TOKEN:-dart}" \
+      bash "${SCRIPT_DIR}/cleanup_desktop_hosts.sh"
+  fi
+
   if tmux has-session -t "${SESSION_NAME}" 2>/dev/null; then
     if [[ "${FORCE:-}" == "1" ]]; then
       tmux kill-session -t "${SESSION_NAME}"

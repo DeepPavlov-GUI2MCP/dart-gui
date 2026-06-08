@@ -52,6 +52,31 @@ bash .cursor/skills/eval-osworld/scripts/run_eval.sh stop     # kill eval sessio
 
 **Opt-out:** If the user says to run in the foreground or without tmux, run `PYTHONPATH=. python <selected-runner>.py ...` directly and warn that closing the terminal will stop the eval.
 
+## Required: clean desktop hosts before every eval
+
+**Always** stop tracked emulators and remove orphaned `happysixd/osworld-docker` containers on **every** dart desktop host before preflight or `run_eval.sh start`. Stale containers cause instant quota failures when workers start in parallel.
+
+```bash
+# Single host (local coordinator)
+bash .cursor/skills/eval-osworld/scripts/cleanup_desktop_hosts.sh
+
+# Multi-host (match --base-url hosts)
+DESKTOP_HOSTS='dart-desktop-2=http://94.139.251.45:50003,coordinator=http://127.0.0.1:50003' \
+  bash .cursor/skills/eval-osworld/scripts/cleanup_desktop_hosts.sh
+```
+
+`DESKTOP_HOSTS` accepts comma-separated URLs or `name=url` pairs (same format as `monitor_holo_eval.py --desktop-hosts`). When unset, cleanup targets `DESKTOP_URL` (default `http://127.0.0.1:50003`).
+
+Per host the script:
+
+1. `POST /stop_all_emulators` (Bearer `dart`)
+2. `POST /remove_all_containers` with `{"image":"happysixd/osworld-docker","min_age":0}`
+3. Prints `/status` emulator counts (expect `emulators=0` before launch)
+
+This cleanup runs automatically in `preflight.sh` (step 0) and `run_eval.sh start`. Set `SKIP_DESKTOP_CLEANUP=1` only when debugging and you intentionally keep running emulators.
+
+For multi-host eval, set `DESKTOP_HOSTS` to the same hosts passed via `--base-url` before preflight and start.
+
 ## Required: check quota, then ask emulator allocation
 
 **Step 1 — always check running emulators first** (before asking how many to run):
@@ -78,17 +103,19 @@ Do **not** assume `--max-workers` or token limit. Wait for an explicit number (t
 
 **Step 3 — after the user answers:**
 
-1. If `requested > free_slots` and emulators are running: **confirm**, then stop them:
+1. **Clean all desktop hosts** (mandatory — even when quota looks free):
 
 ```bash
-curl -s -X POST http://127.0.0.1:50003/stop_all_emulators
-bash .cursor/skills/eval-osworld/scripts/check_emulator_quota.sh   # verify free slots
+DESKTOP_HOSTS='dart-desktop-2=http://94.139.251.45:50003,coordinator=http://127.0.0.1:50003' \
+  bash .cursor/skills/eval-osworld/scripts/cleanup_desktop_hosts.sh
 ```
 
+Omit `DESKTOP_HOSTS` for single-host local eval. Verify each host reports `emulators=0`.
+
 2. Set `--max-workers` to the requested number (parallel task count = parallel emulators).
-3. Set the desktop-server token limit to match (see **Parallel execution** below).
-4. Run preflight with `EMULATOR_COUNT=<n>` so quota is validated before tasks start.
-5. Start the selected runner via `run_eval.sh start` in tmux `osworld-eval` (unless the user opted out of tmux).
+3. Set the desktop-server token limit on **each** host to match (see **Parallel execution** below).
+4. Run preflight with `EMULATOR_COUNT=<n>` and matching `DESKTOP_HOSTS` so cleanup + quota are validated before tasks start.
+5. Start the selected runner via `run_eval.sh start` in tmux `osworld-eval` (unless the user opted out of tmux). Cleanup runs again at start unless `SKIP_DESKTOP_CLEANUP=1`.
 
 If the user did not specify concurrency, ask — do not default to `8`.
 
@@ -181,10 +208,18 @@ During a run, expect `current == max-workers` until tasks finish. After completi
 
 ## Preflight (required before full eval)
 
-Run from repo root. Checks desktop server, model service, vLLM health, lists models, resolves UI-TARS id, sanity `chat/completions`, and **validates emulator quota** when `EMULATOR_COUNT` is set.
+Run from repo root. **Step 0** cleans every host in `DESKTOP_HOSTS`, then checks desktop server, model service, vLLM health, lists models, resolves model id, sanity `chat/completions`, and **validates emulator quota** when `EMULATOR_COUNT` is set.
 
 ```bash
 EMULATOR_COUNT=2 bash .cursor/skills/eval-osworld/scripts/preflight.sh
+```
+
+Multi-host:
+
+```bash
+DESKTOP_HOSTS='dart-desktop-2=http://94.139.251.45:50003,coordinator=http://127.0.0.1:50003' \
+  EMULATOR_COUNT=23 \
+  bash .cursor/skills/eval-osworld/scripts/preflight.sh
 ```
 
 Single emulator (default check):
@@ -361,17 +396,19 @@ Quick pass-rate check: use **analyze-rollouts** skill.
 | `osworld-eval` session already exists | Prior run still active — `run_eval.sh status` / `attach`; or `stop` then `start` |
 | Need live logs | `run_eval.sh status` or `tmux attach -t osworld-eval` |
 | `Token quota exceeded` (429) | Lower `--max-workers` or raise limit via `/set_token_limit` |
+| `Failed to start emulator on all N servers` (instant burst) | Orphaned containers or full quota — run `cleanup_desktop_hosts.sh` on **all** `--base-url` hosts; verify `emulators=0` before restart |
 | Only 1 emulator despite `--max-workers 2` | Check `/status` — quota may be 1; call `/set_token_limit` |
-| Stuck emulators after crash | `curl -X POST http://127.0.0.1:50003/stop_all_emulators` |
-| Need free slots before parallel eval | Run `check_emulator_quota.sh`; stop running emulators if user confirms |
+| Stuck emulators after crash | `cleanup_desktop_hosts.sh` (preferred) or `POST /stop_all_emulators` per host |
+| Need free slots before parallel eval | Run `cleanup_desktop_hosts.sh`, then `check_emulator_quota.sh` |
 
 ## Utility scripts
 
 | Script | When |
 |--------|------|
-| `scripts/check_emulator_quota.sh` | **First** — before asking user for parallel count |
-| `scripts/preflight.sh` | After user confirms count — health + model sanity + quota validation |
-| `scripts/run_eval.sh` | **Start eval** — detached tmux `osworld-eval` (required unless user opts out) |
+| `scripts/cleanup_desktop_hosts.sh` | **Before every eval** — stop emulators + remove orphaned OSWorld containers on each host |
+| `scripts/check_emulator_quota.sh` | Before asking user for parallel count |
+| `scripts/preflight.sh` | After user confirms count — cleanup (step 0) + health + model sanity + quota validation |
+| `scripts/run_eval.sh` | **Start eval** — cleanup then detached tmux `osworld-eval` (required unless user opts out) |
 
 ## Related skills
 
