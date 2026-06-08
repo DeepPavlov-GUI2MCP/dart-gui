@@ -628,9 +628,16 @@ def build_trace_dataset_rows(settings: TraceScanSettings) -> list[dict[str, Any]
     if settings.preflight_augmented_path:
         return build_augmented_preflight_dataset_rows(settings)
     rows: list[dict[str, Any]] = []
+    rollout_count = 0
     for rollout_dir in iter_rollout_dirs(settings.trace_roots):
+        if settings.max_rollouts is not None and rollout_count >= settings.max_rollouts:
+            break
         try:
-            rows.extend(build_rows_for_rollout(rollout_dir, settings))
+            built = build_rows_for_rollout(rollout_dir, settings)
         except (FileNotFoundError, ValueError):
             continue
+        if not built:
+            continue
+        rows.extend(built)
+        rollout_count += 1
     return rows

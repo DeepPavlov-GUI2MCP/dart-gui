@@ -39,7 +39,8 @@ train_sft:
     save_steps: 500
     packing: false
     gradient_checkpointing: true
-    fp16: true
+    bf16: true
+    fp16: false
 
   lora:
     r: 16

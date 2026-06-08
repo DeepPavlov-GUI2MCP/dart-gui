@@ -7,12 +7,17 @@ train_sft:
   dataset:
     format: uitars_trace
     trace_source: holo
-    preflight_augmented_path: GUI-Docker-Env/results/results_holo_gpt54_writer_traces_20260607_031517/preflight_augmented/openai_api/gpt-5.4/tasks.jsonl
-    max_rollouts: 10
+    trace_roots:
+      - GUI-Docker-Env/results/results_holo_gpt54_writer_traces_20260607_031517/pyautogui/screenshot/Hcompany/Holotron-3-Nano
     task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
-    sample_mode: full_trajectory
+    sample_mode: per_step
     history_n: 5
+    max_rollouts: 16
     refresh: true
+    goal_variants: true
+    max_goal_variants: 1
+    pretokenized_traces_dir: datasets/runtime/pretokenized-smoke-16
+    task_generation_root: ../gui_distillation/data/synthetic/libreoffice_writer/active_root_231/task_generation/gpt-5.4
     uitars:
       prompt_style: qwen25vl_normal
       infer_mode: qwen25vl_normal
@@ -21,27 +26,28 @@ train_sft:
       min_pixels: 78400
 
   hf:
-    api_key: ${HUGGINGFACE_API_KEY}
+    api_key: ${HF_TOKEN}
 
   hub:
     push_to_hub: false
 
   output:
-    output_dir: outputs/sft/bench-holo-preflight-full-traj
+    output_dir: outputs/sft/ui-tars-holo-goal-variants-smoke-16
     datasets_dir: datasets/runtime
 
   training:
     per_device_train_batch_size: 1
-    gradient_accumulation_steps: 2
+    gradient_accumulation_steps: 1
     num_train_epochs: 1
     learning_rate: 0.0002
     warmup_steps: 1
-    logging_steps: 9999
-    save_steps: 9999
+    logging_steps: 10
+    save_steps: 100
     packing: false
     gradient_checkpointing: true
     bf16: true
     fp16: false
+    ddp_find_unused_parameters: false
 
   lora:
     r: 16

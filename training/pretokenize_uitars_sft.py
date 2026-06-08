@@ -21,6 +21,7 @@ from build_uitars_sft_dataset import (
     pretokenized_cache_dir_name,
     stage_trace_dataset,
 )
+from pretokenized_manifest import write_manifest_file
 from goal_variant_pretokenize import GoalVariantPretokenizeCaches, expand_row_with_goal_variants
 from goal_variants import GoalVariant, assert_tasks_have_goal_variants, task_examples_path, task_generation_path
 from uitars_collator import tokenize_uitars_messages
@@ -57,6 +58,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--sort-by-cost",
         action="store_true",
         help="Process the largest image/text rows first; useful for throughput benchmarking.",
+    )
+    parser.add_argument(
+        "--partition-mode",
+        choices=("steps", "rollouts"),
+        default="steps",
+        help="Shard rows by per-step budget (default) or keep whole rollouts together.",
     )
     parser.add_argument("--no-save", action="store_true", help="Benchmark tokenization without writing shards.")
     parser.add_argument(
@@ -105,19 +112,38 @@ def load_rows(data_path: Path, *, max_rows: int | None, sort_by_cost: bool) -> l
     return rows
 
 
+def row_budget(row: dict[str, Any]) -> int:
+    images, chars = row_cost(row)
+    return images * 1_000_000 + chars
+
+
 def partition_rows(
     indexed_rows: Sequence[tuple[int, dict[str, Any]]],
     workers: int,
+    *,
+    mode: str = "steps",
 ) -> list[list[tuple[int, dict[str, Any]]]]:
-    groups: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
-    for item in indexed_rows:
-        groups[item[1]["rollout_dir"]].append(item)
-    shards: list[list[tuple[int, dict[str, Any]]]] = [[] for _ in range(workers)]
-    shard_sizes = [0 for _ in range(workers)]
-    for group in sorted(groups.values(), key=len, reverse=True):
-        shard_idx = min(range(workers), key=shard_sizes.__getitem__)
-        shards[shard_idx].extend(group)
-        shard_sizes[shard_idx] += len(group)
+    if workers <= 1:
+        return [list(indexed_rows)]
+
+    if mode == "rollouts":
+        groups: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
+        for item in indexed_rows:
+            groups[item[1]["rollout_dir"]].append(item)
+        shards: list[list[tuple[int, dict[str, Any]]]] = [[] for _ in range(workers)]
+        shard_budgets = [0 for _ in range(workers)]
+        for group in sorted(groups.values(), key=lambda items: sum(row_budget(row) for _, row in items), reverse=True):
+            shard_idx = min(range(workers), key=shard_budgets.__getitem__)
+            shards[shard_idx].extend(group)
+            shard_budgets[shard_idx] += sum(row_budget(row) for _, row in group)
+        return shards
+
+    shards = [[] for _ in range(workers)]
+    shard_budgets = [0 for _ in range(workers)]
+    for item in sorted(indexed_rows, key=lambda entry: (-row_budget(entry[1]), entry[0])):
+        shard_idx = min(range(workers), key=shard_budgets.__getitem__)
+        shards[shard_idx].append(item)
+        shard_budgets[shard_idx] += row_budget(item[1])
     return shards
 
 
@@ -268,21 +294,29 @@ def write_manifest(
     output_dir: Path,
     *,
     settings: TraceScanSettings,
+    base_model: str,
     base_rows: int,
     expanded_rows: int,
     task_count: int,
+    rollout_count: int,
+    shard_count: int,
     variants_per_task: int,
 ) -> None:
-    manifest = {
-        "goal_variants": settings.goal_variants,
-        "max_goal_variants": settings.max_goal_variants,
-        "task_generation_root": settings.task_generation_root,
-        "base_rows": base_rows,
-        "expanded_rows": expanded_rows,
-        "tasks": task_count,
-        "variants_per_task": variants_per_task,
-    }
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    write_manifest_file(
+        output_dir,
+        {
+            "base_model": base_model,
+            "goal_variants": settings.goal_variants,
+            "max_goal_variants": settings.max_goal_variants,
+            "task_generation_root": settings.task_generation_root,
+            "base_rows": base_rows,
+            "expanded_rows": expanded_rows,
+            "tasks": task_count,
+            "rollouts": rollout_count,
+            "shard_count": shard_count,
+            "variants_per_task": variants_per_task,
+        },
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -325,9 +359,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
 
     worker_count = max(1, min(args.workers, len(indexed_rows)))
-    LOGGER.info("[preparation] partitioning rows workers=%d", worker_count)
+    LOGGER.info("[preparation] partitioning rows workers=%d mode=%s", worker_count, args.partition_mode)
     partition_start = time.perf_counter()
-    shards = partition_rows(indexed_rows, worker_count)
+    shards = partition_rows(indexed_rows, worker_count, mode=args.partition_mode)
     LOGGER.info(
         "[preparation] partitioned rows shard_sizes=%s in %.3fs",
         [len(shard) for shard in shards],
@@ -387,13 +421,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     tokenize_s = sum(summary.tokenize_s for summary in summaries)
     save_s = sum(summary.save_s for summary in summaries)
 
-    if output_dir is not None and not args.no_save and settings.goal_variants:
+    if output_dir is not None and not args.no_save:
+        rollout_dirs = {
+            row["rollout_dir"]
+            for _, row in indexed_rows
+            if isinstance(row.get("rollout_dir"), str)
+        }
+        task_ids = {
+            row["task_id"]
+            for _, row in indexed_rows
+            if isinstance(row.get("task_id"), str)
+        }
+        shard_paths = sorted(Path(output_dir).glob("shard-*.pt"))
         write_manifest(
             Path(output_dir),
             settings=settings,
+            base_model=base_model,
             base_rows=base_rows,
             expanded_rows=expanded_rows,
-            task_count=len(goal_catalog_payload or {}),
+            task_count=len(task_ids) if not settings.goal_variants else len(goal_catalog_payload or {}),
+            rollout_count=len(rollout_dirs),
+            shard_count=len(shard_paths),
             variants_per_task=settings.max_goal_variants,
         )
 

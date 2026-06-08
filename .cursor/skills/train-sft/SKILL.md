@@ -107,11 +107,27 @@ hub:
 
 ## Run
 
+Single GPU (uses `device_map=auto`):
+
 ```bash
 cd /home/pitchblack/dart-gui
 source .venv/bin/activate
 python training/run_sft.py --config training/configs/sft_example.yml
 ```
+
+Multi-GPU DDP via `torchrun` (one process per GPU; effective batch =
+`per_device_train_batch_size * num_gpus * gradient_accumulation_steps`):
+
+```bash
+cd /home/pitchblack/dart-gui
+source .venv/bin/activate
+torchrun --standalone --nproc_per_node=2 training/run_sft.py \
+  --config training/configs/sft_example.yml
+```
+
+Rank 0 stages the dataset and writes checkpoints; other ranks wait on a barrier.
+Set `training.ddp_find_unused_parameters: true` in the YAML if DDP reports unused
+parameters (common with some frozen vision towers).
 
 Dry-run without loading model or training:
 
