@@ -22,7 +22,11 @@ from build_uitars_sft_dataset import (
     stage_trace_dataset,
 )
 from pretokenized_manifest import write_manifest_file
-from goal_variant_pretokenize import GoalVariantPretokenizeCaches, expand_row_with_goal_variants
+from goal_variant_pretokenize import (
+    GoalVariantPretokenizeCaches,
+    evict_step_caches,
+    expand_row_with_goal_variants,
+)
 from goal_variants import GoalVariant, assert_tasks_have_goal_variants, task_examples_path, task_generation_path
 from uitars_collator import tokenize_uitars_messages
 from uitars_format import UitarsFormatSettings, resolve_staged_messages
@@ -64,7 +68,9 @@ def save_record_chunk(
 ) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     shard_path = shard_path_for_chunk(output_dir, worker_id, chunk_idx, chunked=chunked)
-    torch.save(records, shard_path)
+    temp_path = shard_path.with_suffix(shard_path.suffix + ".tmp")
+    torch.save(records, temp_path)
+    temp_path.replace(shard_path)
     return shard_path
 
 
@@ -267,6 +273,8 @@ def pretokenize_worker(
         )
         save_s += time.perf_counter() - save_start
         records.clear()
+        if variant_caches is not None:
+            variant_caches.image_cache.clear()
         output_path = str(shard_path)
         chunk_count += 1
         chunk_idx += 1
@@ -296,6 +304,12 @@ def pretokenize_worker(
                 expanded_rows += 1
                 if not no_save:
                     flush_records()
+            if variant_caches is not None:
+                evict_step_caches(
+                    variant_caches,
+                    rollout_dir=str(rollout_dir),
+                    step_num=int(row.get("step_num", -1)),
+                )
             continue
 
         resolve_start = time.perf_counter()

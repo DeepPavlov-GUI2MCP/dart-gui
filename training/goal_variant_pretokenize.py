@@ -38,6 +38,15 @@ class GoalVariantPretokenizeCaches:
     image_cache: dict[Path, dict[str, Any]] = field(default_factory=dict)
 
 
+def evict_step_caches(
+    caches: GoalVariantPretokenizeCaches,
+    *,
+    rollout_dir: str,
+    step_num: int,
+) -> None:
+    caches.suffix_cache.pop((rollout_dir, step_num), None)
+
+
 def _prefix_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if len(messages) < 2:
         raise ValueError("Expected at least system and instruction user messages.")
