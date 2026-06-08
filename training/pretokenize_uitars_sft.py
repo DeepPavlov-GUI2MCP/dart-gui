@@ -21,6 +21,7 @@ from build_uitars_sft_dataset import (
     pretokenized_cache_dir_name,
     stage_trace_dataset,
 )
+from pretokenized_manifest import write_manifest_file
 from goal_variant_pretokenize import GoalVariantPretokenizeCaches, expand_row_with_goal_variants
 from goal_variants import GoalVariant, assert_tasks_have_goal_variants, task_examples_path, task_generation_path
 from uitars_collator import tokenize_uitars_messages
@@ -268,21 +269,29 @@ def write_manifest(
     output_dir: Path,
     *,
     settings: TraceScanSettings,
+    base_model: str,
     base_rows: int,
     expanded_rows: int,
     task_count: int,
+    rollout_count: int,
+    shard_count: int,
     variants_per_task: int,
 ) -> None:
-    manifest = {
-        "goal_variants": settings.goal_variants,
-        "max_goal_variants": settings.max_goal_variants,
-        "task_generation_root": settings.task_generation_root,
-        "base_rows": base_rows,
-        "expanded_rows": expanded_rows,
-        "tasks": task_count,
-        "variants_per_task": variants_per_task,
-    }
-    (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    write_manifest_file(
+        output_dir,
+        {
+            "base_model": base_model,
+            "goal_variants": settings.goal_variants,
+            "max_goal_variants": settings.max_goal_variants,
+            "task_generation_root": settings.task_generation_root,
+            "base_rows": base_rows,
+            "expanded_rows": expanded_rows,
+            "tasks": task_count,
+            "rollouts": rollout_count,
+            "shard_count": shard_count,
+            "variants_per_task": variants_per_task,
+        },
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -387,13 +396,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     tokenize_s = sum(summary.tokenize_s for summary in summaries)
     save_s = sum(summary.save_s for summary in summaries)
 
-    if output_dir is not None and not args.no_save and settings.goal_variants:
+    if output_dir is not None and not args.no_save:
+        rollout_dirs = {
+            row["rollout_dir"]
+            for _, row in indexed_rows
+            if isinstance(row.get("rollout_dir"), str)
+        }
+        task_ids = {
+            row["task_id"]
+            for _, row in indexed_rows
+            if isinstance(row.get("task_id"), str)
+        }
+        shard_paths = sorted(Path(output_dir).glob("shard-*.pt"))
         write_manifest(
             Path(output_dir),
             settings=settings,
+            base_model=base_model,
             base_rows=base_rows,
             expanded_rows=expanded_rows,
-            task_count=len(goal_catalog_payload or {}),
+            task_count=len(task_ids) if not settings.goal_variants else len(goal_catalog_payload or {}),
+            rollout_count=len(rollout_dirs),
+            shard_count=len(shard_paths),
             variants_per_task=settings.max_goal_variants,
         )
 
