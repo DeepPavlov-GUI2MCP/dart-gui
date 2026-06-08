@@ -3,12 +3,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset, get_worker_info
 from tqdm import tqdm
 
 from uitars_format import UitarsFormatSettings, resolve_staged_messages
@@ -218,39 +219,189 @@ def make_uitars_data_collator(processor: Any) -> Callable[[list[dict[str, Any]]]
     return collate
 
 
-class PretokenizedUitarsDataset(Dataset):
-    def __init__(self, pretokenized_dir: Path) -> None:
-        shard_paths = sorted(Path(pretokenized_dir).glob("shard-*.pt"))
-        if not shard_paths:
-            raise ValueError(f"No pretokenized shards found under {pretokenized_dir}")
+def _load_pretokenized_manifest(pretokenized_dir: Path) -> dict[str, Any]:
+    path = pretokenized_dir / "manifest.json"
+    if not path.is_file():
+        return {}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
 
-        rank = os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0"))
-        self.records: list[dict[str, Any]] = []
+
+def _shard_worker_key(path: Path) -> tuple[int, int] | None:
+    parts = path.stem.split("-")
+    if len(parts) != 3:
+        return None
+    try:
+        return int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+
+
+def _load_shard_records(shard_path: Path) -> list[dict[str, Any]]:
+    payload = torch.load(shard_path, weights_only=False)
+    if not isinstance(payload, list):
+        raise ValueError(f"Pretokenized shard must contain a list: {shard_path}")
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def _infer_chunked_shard_counts(
+    shard_paths: Sequence[Path],
+    *,
+    total_records: int | None,
+) -> list[int] | None:
+    keyed_paths: list[tuple[int, int, Path]] = []
+    for shard_path in shard_paths:
+        key = _shard_worker_key(shard_path)
+        if key is None:
+            return None
+        keyed_paths.append((key[0], key[1], shard_path))
+    if not keyed_paths:
+        return []
+
+    first_count = len(_load_shard_records(keyed_paths[0][2]))
+    by_worker: dict[int, list[tuple[int, Path]]] = {}
+    for worker_id, chunk_idx, shard_path in keyed_paths:
+        by_worker.setdefault(worker_id, []).append((chunk_idx, shard_path))
+
+    counts_by_path: dict[Path, int] = {}
+    for chunks in by_worker.values():
+        chunks.sort()
+        for _, shard_path in chunks[:-1]:
+            counts_by_path[shard_path] = first_count
+        last_path = chunks[-1][1]
+        counts_by_path[last_path] = len(_load_shard_records(last_path))
+
+    counts = [counts_by_path[path] for path in shard_paths]
+    if total_records is not None and sum(counts) != total_records:
+        raise ValueError(
+            f"Inferred {sum(counts)} pretokenized records, but manifest expects {total_records}."
+        )
+    return counts
+
+
+def _is_simple_worker_shard(path: Path) -> bool:
+    parts = path.stem.split("-")
+    return len(parts) == 2 and parts[0] == "shard"
+
+
+def _infer_simple_shard_counts(
+    shard_paths: Sequence[Path],
+    *,
+    total_records: int | None,
+) -> list[int] | None:
+    if not shard_paths or not all(_is_simple_worker_shard(path) for path in shard_paths):
+        return None
+    if total_records is None:
+        return None
+    if len(shard_paths) == 1:
+        return [total_records]
+    first_count = len(_load_shard_records(shard_paths[0]))
+    counts = [first_count] * (len(shard_paths) - 1)
+    last_count = total_records - first_count * (len(shard_paths) - 1)
+    if last_count <= 0:
+        last_count = len(_load_shard_records(shard_paths[-1]))
+    counts.append(last_count)
+    if sum(counts) != total_records:
+        return None
+    return counts
+
+
+def _load_shard_counts(shard_paths: Sequence[Path], manifest: dict[str, Any]) -> list[int]:
+    total_records = manifest.get("expanded_rows")
+    if not isinstance(total_records, int):
+        total_records = None
+    if len(shard_paths) == 1 and total_records is not None:
+        return [total_records]
+
+    counts = _infer_chunked_shard_counts(shard_paths, total_records=total_records)
+    if counts is not None:
+        return counts
+
+    counts = _infer_simple_shard_counts(shard_paths, total_records=total_records)
+    if counts is not None:
+        return counts
+
+    counts = [len(_load_shard_records(path)) for path in tqdm(shard_paths, desc="counting shards", unit="shard")]
+    if total_records is not None and sum(counts) != total_records:
+        raise ValueError(
+            f"Found {sum(counts)} pretokenized records, but manifest expects {total_records}."
+        )
+    return counts
+
+
+class PretokenizedUitarsDataset(IterableDataset):
+    def __init__(self, pretokenized_dir: Path) -> None:
+        self.pretokenized_dir = Path(pretokenized_dir)
+        self.shard_paths = sorted(self.pretokenized_dir.glob("shard-*.pt"))
+        if not self.shard_paths:
+            raise ValueError(f"No pretokenized shards found under {pretokenized_dir}")
+        self.shard_counts = _load_shard_counts(self.shard_paths, _load_pretokenized_manifest(self.pretokenized_dir))
+        if sum(self.shard_counts) == 0:
+            raise ValueError(f"No pretokenized records found under {pretokenized_dir}")
+        self.cumulative_counts: list[int] = []
+        running = 0
+        for count in self.shard_counts:
+            running += count
+            self.cumulative_counts.append(running)
+        self._cached_shard_path: Path | None = None
+        self._cached_records: list[dict[str, Any]] = []
+
+    def __len__(self) -> int:
+        rank, world_size = self._rank_info()
+        return sum(
+            count
+            for shard_idx, count in enumerate(self.shard_counts)
+            if shard_idx % world_size == rank
+        )
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        if index < 0 or index >= self.cumulative_counts[-1]:
+            raise IndexError(index)
+        shard_idx = bisect_right(self.cumulative_counts, index)
+        previous_count = 0 if shard_idx == 0 else self.cumulative_counts[shard_idx - 1]
+        record = self._load_cached_shard(self.shard_paths[shard_idx])[index - previous_count]
+        return self._record_to_item(record)
+
+    def __iter__(self):
+        rank, world_size = self._rank_info()
+        worker = get_worker_info()
+        worker_id = worker.id if worker is not None else 0
+        worker_count = worker.num_workers if worker is not None else 1
+        assigned = [
+            idx
+            for idx in range(len(self.shard_paths))
+            if idx % world_size == rank and (idx // world_size) % worker_count == worker_id
+        ]
         progress = tqdm(
-            shard_paths,
-            desc=f"rank {rank} loading pretokenized shards",
+            assigned,
+            desc=f"rank {rank} streaming pretokenized shards",
             unit="shard",
             mininterval=1.0,
             file=sys.stderr,
         )
-        for shard_path in progress:
-            payload = torch.load(shard_path, weights_only=False)
-            if isinstance(payload, list):
-                self.records.extend(item for item in payload if isinstance(item, dict))
-                progress.set_postfix(records=len(self.records), last=shard_path.name, refresh=False)
-        progress.close()
-        if not self.records:
-            raise ValueError(f"No pretokenized records found under {pretokenized_dir}")
-        print(
-            f"Loaded {len(self.records)} pretokenized records from {len(shard_paths)} shards",
-            file=sys.stderr,
-        )
+        records_seen = 0
+        for shard_idx in progress:
+            shard_path = self.shard_paths[shard_idx]
+            records = _load_shard_records(shard_path)
+            records_seen += len(records)
+            progress.set_postfix(records=records_seen, last=shard_path.name, refresh=False)
+            for record in records:
+                yield self._record_to_item(record)
 
-    def __len__(self) -> int:
-        return len(self.records)
+    @staticmethod
+    def _rank_info() -> tuple[int, int]:
+        rank = int(os.environ.get("RANK", "0"))
+        world_size = max(1, int(os.environ.get("WORLD_SIZE", "1")))
+        return rank, world_size
 
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        record = self.records[index]
+    def _load_cached_shard(self, shard_path: Path) -> list[dict[str, Any]]:
+        if self._cached_shard_path != shard_path:
+            self._cached_records = _load_shard_records(shard_path)
+            self._cached_shard_path = shard_path
+        return self._cached_records
+
+    @staticmethod
+    def _record_to_item(record: dict[str, Any]) -> dict[str, Any]:
         features = record.get("features")
         if not isinstance(features, dict):
             raise ValueError("Pretokenized record is missing features.")

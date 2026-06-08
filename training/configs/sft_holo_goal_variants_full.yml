@@ -15,6 +15,7 @@ train_sft:
     refresh: false
     goal_variants: true
     max_goal_variants: 1
+    pretokenized_traces_dir: datasets/runtime/uitars-traces-b8a44e9156a4/pretokenized-uitars-traces-b8a44e9156a4
     task_generation_root: ../gui_distillation/data/synthetic/libreoffice_writer/active_root_231/task_generation/gpt-5.4
     uitars:
       prompt_style: qwen25vl_normal

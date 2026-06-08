@@ -22,9 +22,9 @@ import client_lib
 
 REPO_ROOT = _REPO_ROOT
 
-REGION = os.environ.get("DART_JOB_REGION", "SR004")
+REGION = os.environ.get("DART_JOB_REGION", "A100-MT")
 USR_NAME = os.environ.get("DART_USR_NAME", "username")
-PRJ_TAGS = os.environ.get("DART_PRJ_TAGS", "#dart-gui")
+PRJ_TAGS = os.environ.get("DART_PRJ_TAGS", "#ID0045 #rnd")
 
 N_GPUS_TO_INSTANCE_TYPE = {
     1: "a100.1gpu.8C.243G",
@@ -33,7 +33,7 @@ N_GPUS_TO_INSTANCE_TYPE = {
     8: "a100.8gpu.64C.1944G",
 }
 
-DEFAULT_QUEUE_NAME = os.environ.get("DART_JOB_QUEUE_NAME", "").strip()
+DEFAULT_QUEUE_NAME = os.environ.get("DART_JOB_QUEUE_NAME", "rnd-gigachat-embs").strip()
 
 
 def repo_path(*parts: str) -> str:

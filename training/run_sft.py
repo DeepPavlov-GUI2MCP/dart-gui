@@ -671,7 +671,7 @@ def is_vision_model(model_name: str, trust_remote_code: bool, *, token: str | No
     return any(token in arch_text for token in ("vision", "vl", "image", "multimodal"))
 
 
-def build_sft_config(config: ResolvedConfig) -> Any:
+def build_sft_config(config: ResolvedConfig, *, pretokenized: bool = False) -> Any:
     import torch
     from trl import SFTConfig
 
@@ -714,6 +714,8 @@ def build_sft_config(config: ResolvedConfig) -> Any:
         kwargs["hub_model_id"] = config.hub.model_id
         if config.hub.revision:
             kwargs["hub_revision"] = config.hub.revision
+    if pretokenized:
+        kwargs["accelerator_config"] = {"dispatch_batches": False}
     kwargs.update(distributed_sft_overrides(config))
     return SFTConfig(**kwargs)
 
@@ -847,7 +849,7 @@ def train(
         config.output_dir.mkdir(parents=True, exist_ok=True)
     if is_distributed():
         distributed_barrier()
-    sft_config = build_sft_config(config)
+    sft_config = build_sft_config(config, pretokenized=pretokenized_dir is not None)
     model, processor, tokenizer, peft_config = load_model_and_processor(config)
 
     if pretokenized_dir is not None:
@@ -1023,7 +1025,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if pretokenized_dir is not None:
         if args.dry_run:
             if is_main_process():
-                print_dry_run_summary(config, None, build_sft_config(config), pretokenized_dir=pretokenized_dir)
+                print_dry_run_summary(
+                    config,
+                    None,
+                    build_sft_config(config, pretokenized=True),
+                    pretokenized_dir=pretokenized_dir,
+                )
             return 0
         train(config, pretokenized_dir=pretokenized_dir)
         return 0

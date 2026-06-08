@@ -43,9 +43,9 @@ checkout machine before `client_lib.Job.submit()`. Non-zero exit aborts submissi
 |----------|---------|---------|
 | `DART_JOB_IMAGE` | unset (required) | Full registry URL after `docker push` |
 | `DART_USR_NAME` | `username` | Username in job description |
-| `DART_PRJ_TAGS` | `#dart-gui` | Project tags in job description |
-| `DART_JOB_REGION` | `SR004` | ML Space region |
-| `DART_JOB_QUEUE_NAME` | unset | `queue_name`; set empty to omit |
+| `DART_PRJ_TAGS` | `#ID0045 #rnd` | Project tags in job description |
+| `DART_JOB_REGION` | `A100-MT` | ML Space region |
+| `DART_JOB_QUEUE_NAME` | `rnd-gigachat-embs` | `queue_name`; set empty to omit |
 | `DART_JOB_PRIORITY_CLASS` | `high` | Queue priority (`low`, `medium`, `high`; `none` to omit) |
 | `DART_JOB` | unset | Job name if omitted on CLI |
 | `DART_HF_HOME` | `data/.cache/huggingface` | NFS Hugging Face cache |
