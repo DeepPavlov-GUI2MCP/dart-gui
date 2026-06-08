@@ -14,6 +14,7 @@ import yaml
 
 from build_uitars_sft_dataset import cache_name as uitars_cache_name
 from build_uitars_sft_dataset import stage_trace_dataset
+from hf_hub import configure_hf_hub, load_pretrained
 from uitars_collator import (
     PretokenizedUitarsDataset,
     UitarsTraceDataset,
@@ -427,10 +428,7 @@ def wait_for_path(path: Path, *, timeout_s: float = 3600.0) -> None:
 
 
 def configure_hf_env(config: ResolvedConfig) -> None:
-    if not config.hf.api_key:
-        return
-    for name in ("HF_API_KEY", "HUGGINGFACE_API_KEY", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"):
-        os.environ[name] = config.hf.api_key
+    configure_hf_hub(config_token=config.hf.api_key)
 
 
 def validate_hub_write(config: ResolvedConfig, *, skip: bool) -> None:
@@ -578,10 +576,15 @@ def prepare_train_dataset(data_path: Path, dataset_settings: DatasetSettings):
     return dataset.map(add_messages, remove_columns=dataset.column_names)
 
 
-def is_vision_model(model_name: str, trust_remote_code: bool) -> bool:
+def is_vision_model(model_name: str, trust_remote_code: bool, *, token: str | None = None) -> bool:
     from transformers import AutoConfig
 
-    model_config = AutoConfig.from_pretrained(model_name, trust_remote_code=trust_remote_code)
+    model_config = load_pretrained(
+        AutoConfig,
+        model_name,
+        trust_remote_code=trust_remote_code,
+        token=token,
+    )
     model_type = getattr(model_config, "model_type", None)
     if isinstance(model_type, str) and model_type in VISION_MODEL_TYPES:
         return True
@@ -598,7 +601,9 @@ def build_sft_config(config: ResolvedConfig) -> Any:
     use_bf16 = config.training.bf16 and torch.cuda.is_available()
     packing = config.training.packing
     if config.dataset.format == "uitars_trace" or is_vision_model(
-        config.model.base_model, config.model.trust_remote_code
+        config.model.base_model,
+        config.model.trust_remote_code,
+        token=configure_hf_hub(config_token=config.hf.api_key),
     ):
         packing = False
     kwargs: dict[str, Any] = {
@@ -647,21 +652,33 @@ def load_model_and_processor(config: ResolvedConfig):
     from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
     trust_remote_code = config.model.trust_remote_code
+    hf_token = configure_hf_hub(config_token=config.hf.api_key)
     use_vision = config.dataset.format == "uitars_trace" or is_vision_model(
-        config.model.base_model, trust_remote_code
+        config.model.base_model,
+        trust_remote_code,
+        token=hf_token,
     )
 
     if use_vision:
-        processor = AutoProcessor.from_pretrained(config.model.base_model, trust_remote_code=trust_remote_code)
+        processor = load_pretrained(
+            AutoProcessor,
+            config.model.base_model,
+            trust_remote_code=trust_remote_code,
+            token=hf_token,
+        )
         tokenizer = processor.tokenizer
     else:
         processor = None
-        tokenizer = AutoTokenizer.from_pretrained(config.model.base_model, trust_remote_code=trust_remote_code)
+        tokenizer = load_pretrained(
+            AutoTokenizer,
+            config.model.base_model,
+            trust_remote_code=trust_remote_code,
+            token=hf_token,
+        )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     model_kwargs: dict[str, Any] = {
-        "trust_remote_code": trust_remote_code,
         "torch_dtype": torch.float16,
     }
     if is_distributed():
@@ -672,9 +689,21 @@ def load_model_and_processor(config: ResolvedConfig):
         model_kwargs["device_map"] = "auto"
 
     if use_vision:
-        model = AutoModelForImageTextToText.from_pretrained(config.model.base_model, **model_kwargs)
+        model = load_pretrained(
+            AutoModelForImageTextToText,
+            config.model.base_model,
+            trust_remote_code=trust_remote_code,
+            token=hf_token,
+            **model_kwargs,
+        )
     else:
-        model = AutoModelForCausalLM.from_pretrained(config.model.base_model, **model_kwargs)
+        model = load_pretrained(
+            AutoModelForCausalLM,
+            config.model.base_model,
+            trust_remote_code=trust_remote_code,
+            token=hf_token,
+            **model_kwargs,
+        )
 
     peft_config = LoraConfig(
         r=config.lora.r,
@@ -895,6 +924,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.skip_hf_validation and not args.dry_run:
         parser.error("`--skip-hf-validation` is only allowed with `--dry-run`.")
     reject_mixed_config_usage(parser, raw_argv, args)
+    configure_hf_hub()
     config = load_config_file(args.config) if args.config else resolve_args(args)
     configure_hf_env(config)
     if is_main_process():

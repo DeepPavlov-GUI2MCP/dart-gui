@@ -6,7 +6,6 @@ import logging
 import os
 import sys
 import time
-from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,15 +109,9 @@ def partition_rows(
     indexed_rows: Sequence[tuple[int, dict[str, Any]]],
     workers: int,
 ) -> list[list[tuple[int, dict[str, Any]]]]:
-    groups: dict[str, list[tuple[int, dict[str, Any]]]] = defaultdict(list)
-    for item in indexed_rows:
-        groups[item[1]["rollout_dir"]].append(item)
     shards: list[list[tuple[int, dict[str, Any]]]] = [[] for _ in range(workers)]
-    shard_sizes = [0 for _ in range(workers)]
-    for group in sorted(groups.values(), key=len, reverse=True):
-        shard_idx = min(range(workers), key=shard_sizes.__getitem__)
-        shards[shard_idx].extend(group)
-        shard_sizes[shard_idx] += len(group)
+    for item_index, item in enumerate(indexed_rows):
+        shards[item_index % workers].append(item)
     return shards
 
 
