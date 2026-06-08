@@ -126,6 +126,10 @@ def build_user_prompt(instruction: str, settings: UitarsFormatSettings) -> str:
     )
 
 
+def normalize_assistant_response(response: str) -> str:
+    return add_box_token(response)
+
+
 def build_messages_from_images_and_responses(
     instruction: str,
     image_paths: Sequence[Path],
@@ -171,7 +175,7 @@ def build_messages_from_images_and_responses(
             messages.append(
                 {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": add_box_token(history_response)}],
+                    "content": [{"type": "text", "text": normalize_assistant_response(history_response)}],
                 }
             )
         append_image(image_num)
@@ -182,7 +186,7 @@ def build_messages_from_images_and_responses(
         messages.append(
             {
                 "role": "assistant",
-                "content": [{"type": "text", "text": target_response}],
+                "content": [{"type": "text", "text": normalize_assistant_response(target_response)}],
             }
         )
     return messages

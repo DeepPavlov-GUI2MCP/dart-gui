@@ -358,6 +358,46 @@ def build_holo_preflight_augmented_per_step_rows(
     return built
 
 
+def build_holo_preflight_augmented_full_trajectory_row(
+    rollout_dir: Path,
+    instruction: str,
+    settings: TraceScanSettings,
+    rows: list[TrajRow],
+    augmented_steps: Sequence[AugmentedPreflightStep],
+) -> dict[str, Any] | None:
+    if not augmented_steps:
+        return None
+    index_by_step_num = {row.step_num: idx for idx, row in enumerate(rows)}
+    last_step = augmented_steps[-1]
+    row_idx = index_by_step_num.get(last_step.step_num)
+    if row_idx is None:
+        return None
+    if not is_preflight_row(rows[row_idx]):
+        return None
+    image_paths = [rollout_dir / rows[i].screenshot_file for i in range(row_idx)]
+    if not image_paths or not all(path.is_file() for path in image_paths):
+        return None
+    converted = [convert_holo_response(step.response) for step in augmented_steps]
+    format_settings = _format_settings(settings)
+    messages = build_messages_from_images_and_responses(
+        instruction,
+        image_paths,
+        converted[:-1],
+        format_settings,
+        target_response=converted[-1],
+        stage_relative_paths=True,
+        rollout_dir=rollout_dir,
+    )
+    return {
+        "messages": messages,
+        "task_id": infer_domain_and_task_id(rollout_dir)[1],
+        "rollout_dir": str(rollout_dir),
+        "step_num": last_step.step_num,
+        "sample_mode": "full_trajectory",
+        "loss_on_last_assistant_only": False,
+    }
+
+
 def build_augmented_preflight_rows_for_entry(
     trace_root: Path,
     payload: Mapping[str, Any],
@@ -381,6 +421,15 @@ def build_augmented_preflight_rows_for_entry(
     augmented_steps = parse_augmented_preflight_steps(payload)
     if settings.max_preflight_steps is not None:
         augmented_steps = augmented_steps[: settings.max_preflight_steps]
+    if settings.sample_mode == "full_trajectory":
+        row = build_holo_preflight_augmented_full_trajectory_row(
+            rollout_dir,
+            instruction,
+            settings,
+            traj_rows,
+            augmented_steps,
+        )
+        return [row] if row is not None else []
     return build_holo_preflight_augmented_per_step_rows(
         rollout_dir,
         instruction,

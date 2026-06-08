@@ -22,6 +22,7 @@ from mm_agents.holo.schema import (  # noqa: E402
     WaitArgs,
     WriteArgs,
 )
+from mm_agents.uitars15_v1 import add_box_token  # noqa: E402
 
 
 def _escape_type_content(content: str) -> str:
@@ -82,7 +83,7 @@ def parse_holo_response(raw: str) -> Step:
 def holo_step_to_uitars_response(step: Step) -> str:
     thought = (step.thought or "").strip()
     action = holo_tool_to_uitars_action(step)
-    return f"Thought: {thought}\nAction: {action}"
+    return add_box_token(f"Thought: {thought}\nAction: {action}")
 
 
 def convert_holo_response(raw: str) -> str:

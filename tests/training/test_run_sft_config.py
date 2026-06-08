@@ -104,7 +104,7 @@ def test_holo_to_uitars_converter():
     click = holo_to_uitars.convert_holo_response(
         '{"thought":"Open menu","tool_call":{"tool_name":"click","element":"Help","x":100,"y":200,"button":"left"}}'
     )
-    assert click == "Thought: Open menu\nAction: click(start_box='(100,200)')"
+    assert click == "Thought: Open menu\nAction: click(start_box='<|box_start|>(100,200)<|box_end|>')"
 
     write = holo_to_uitars.convert_holo_response(
         '{"thought":"Type text","tool_call":{"tool_name":"write","content":"hello","press_enter":false,"overwrite":false}}'
@@ -120,6 +120,31 @@ def test_holo_to_uitars_converter():
         '{"thought":"Blocked","tool_call":{"tool_name":"fail","reason":"cannot continue"}}'
     )
     assert fail == "Thought: Blocked\nAction: call_user()"
+
+
+def test_uitars_messages_normalize_all_assistant_actions():
+    uitars_format = import_training_module("uitars_format")
+    image_paths = [
+        HOLO_FIXTURE_ROLLOUT / "step_3_20250101@120002.png",
+        HOLO_FIXTURE_ROLLOUT / "step_4_20250101@120003.png",
+    ]
+    messages = uitars_format.build_messages_from_images_and_responses(
+        "Test task",
+        image_paths,
+        ["Thought: Open menu\nAction: click(start_box='(100,200)')"],
+        uitars_format.UitarsFormatSettings(),
+        target_response="Thought: Choose item\nAction: click(start_box='(300,400)')",
+        stage_relative_paths=True,
+        rollout_dir=HOLO_FIXTURE_ROLLOUT,
+    )
+    assistant_texts = [
+        message["content"][0]["text"]
+        for message in messages
+        if message["role"] == "assistant"
+    ]
+    assert len(assistant_texts) == 2
+    assert all("<|box_start|>" in text and "<|box_end|>" in text for text in assistant_texts)
+    assert all("start_box='(" not in text for text in assistant_texts)
 
 
 def test_build_holo_per_step_rows_use_prior_screenshot():
