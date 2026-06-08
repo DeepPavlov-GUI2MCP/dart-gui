@@ -75,9 +75,14 @@ def load_trace_scan_settings(config_path: str) -> tuple[TraceScanSettings, Path,
         raise ValueError("`dataset.format` must be `uitars_trace` for this script.")
 
     trace_roots_raw = dataset_cfg.get("trace_roots")
-    if not isinstance(trace_roots_raw, list) or not trace_roots_raw:
-        raise ValueError("`dataset.trace_roots` must be a non-empty list.")
+    if trace_roots_raw is None:
+        trace_roots_raw = []
+    if not isinstance(trace_roots_raw, list):
+        raise ValueError("`dataset.trace_roots` must be a list.")
     trace_roots = tuple(str(item).strip() for item in trace_roots_raw if str(item).strip())
+    preflight_augmented_path = get_optional_str(dataset_cfg, "preflight_augmented_path")
+    if not trace_roots and not preflight_augmented_path:
+        raise ValueError("`dataset.trace_roots` or `dataset.preflight_augmented_path` is required.")
     task_examples_dir = get_optional_str(dataset_cfg, "task_examples_dir")
     if not task_examples_dir:
         raise ValueError("`dataset.task_examples_dir` is required for uitars_trace datasets.")
@@ -96,6 +101,21 @@ def load_trace_scan_settings(config_path: str) -> tuple[TraceScanSettings, Path,
     if trace_source not in {"auto", "uitars", "holo"}:
         raise ValueError("`dataset.trace_source` must be one of: auto, uitars, holo.")
 
+    trace_root = get_optional_str(dataset_cfg, "trace_root")
+    max_rollouts_raw = dataset_cfg.get("max_rollouts")
+    max_rollouts: int | None = None
+    if max_rollouts_raw is not None:
+        if isinstance(max_rollouts_raw, bool) or not isinstance(max_rollouts_raw, int):
+            raise ValueError("`dataset.max_rollouts` must be an integer.")
+        max_rollouts = max_rollouts_raw
+
+    max_preflight_steps_raw = dataset_cfg.get("max_preflight_steps")
+    max_preflight_steps: int | None = None
+    if max_preflight_steps_raw is not None:
+        if isinstance(max_preflight_steps_raw, bool) or not isinstance(max_preflight_steps_raw, int):
+            raise ValueError("`dataset.max_preflight_steps` must be an integer.")
+        max_preflight_steps = max_preflight_steps_raw
+
     settings = TraceScanSettings(
         trace_roots=trace_roots,
         task_examples_dir=task_examples_dir,
@@ -104,6 +124,10 @@ def load_trace_scan_settings(config_path: str) -> tuple[TraceScanSettings, Path,
         min_result=get_optional_float(dataset_cfg, "min_result"),
         trace_source=trace_source,  # type: ignore[arg-type]
         uitars=uitars,
+        preflight_augmented_path=preflight_augmented_path,
+        trace_root=trace_root,
+        max_rollouts=max_rollouts,
+        max_preflight_steps=max_preflight_steps,
     )
     datasets_dir = repo_path(get_optional_str(output_cfg, "datasets_dir", "datasets/runtime") or "datasets/runtime")
     refresh = get_optional_bool(dataset_cfg, "refresh", False)
@@ -119,6 +143,10 @@ def cache_name(settings: TraceScanSettings) -> str:
             "history_n": settings.history_n,
             "min_result": settings.min_result,
             "trace_source": settings.trace_source,
+            "preflight_augmented_path": settings.preflight_augmented_path,
+            "trace_root": settings.trace_root,
+            "max_rollouts": settings.max_rollouts,
+            "max_preflight_steps": settings.max_preflight_steps,
             "uitars": {
                 "prompt_style": settings.uitars.prompt_style,
                 "infer_mode": settings.uitars.infer_mode,

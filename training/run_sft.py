@@ -58,6 +58,10 @@ class DatasetSettings:
     history_n: int = 5
     min_result: float | None = None
     trace_source: str = "auto"
+    preflight_augmented_path: str | None = None
+    trace_root: str | None = None
+    max_rollouts: int | None = None
+    max_preflight_steps: int | None = None
     uitars: UitarsFormatSettings = field(default_factory=UitarsFormatSettings)
 
 
@@ -232,13 +236,32 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
     if trace_source not in {"auto", "uitars", "holo"}:
         raise ValueError("`dataset.trace_source` must be one of: auto, uitars, holo.")
 
+    preflight_augmented_path = get_optional_str(dataset_cfg, "preflight_augmented_path")
+    trace_root = get_optional_str(dataset_cfg, "trace_root")
+    max_rollouts_raw = dataset_cfg.get("max_rollouts")
+    max_rollouts: int | None = None
+    if max_rollouts_raw is not None:
+        if isinstance(max_rollouts_raw, bool) or not isinstance(max_rollouts_raw, int):
+            raise ValueError("`dataset.max_rollouts` must be an integer.")
+        max_rollouts = max_rollouts_raw
+
+    max_preflight_steps_raw = dataset_cfg.get("max_preflight_steps")
+    max_preflight_steps: int | None = None
+    if max_preflight_steps_raw is not None:
+        if isinstance(max_preflight_steps_raw, bool) or not isinstance(max_preflight_steps_raw, int):
+            raise ValueError("`dataset.max_preflight_steps` must be an integer.")
+        max_preflight_steps = max_preflight_steps_raw
+
     repo_id = get_optional_str(dataset_cfg, "repo_id")
     if dataset_format == "chat":
         if not repo_id:
             raise ValueError("`dataset.repo_id` is required when `dataset.format` is `chat`.")
     elif dataset_format == "uitars_trace":
-        if not trace_roots:
-            raise ValueError("`dataset.trace_roots` is required when `dataset.format` is `uitars_trace`.")
+        if not trace_roots and not preflight_augmented_path:
+            raise ValueError(
+                "`dataset.trace_roots` or `dataset.preflight_augmented_path` is required "
+                "when `dataset.format` is `uitars_trace`."
+            )
         if not get_optional_str(dataset_cfg, "task_examples_dir"):
             raise ValueError("`dataset.task_examples_dir` is required when `dataset.format` is `uitars_trace`.")
     else:
@@ -264,6 +287,10 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         history_n=history_n,
         min_result=min_result,
         trace_source=trace_source,
+        preflight_augmented_path=preflight_augmented_path,
+        trace_root=trace_root,
+        max_rollouts=max_rollouts,
+        max_preflight_steps=max_preflight_steps,
         uitars=uitars,
     )
 
@@ -368,6 +395,10 @@ def stage_dataset(config: ResolvedConfig, *, dry_run: bool = False) -> Path:
             min_result=config.dataset.min_result,
             trace_source=config.dataset.trace_source,  # type: ignore[arg-type]
             uitars=config.dataset.uitars,
+            preflight_augmented_path=config.dataset.preflight_augmented_path,
+            trace_root=config.dataset.trace_root,
+            max_rollouts=config.dataset.max_rollouts,
+            max_preflight_steps=config.dataset.max_preflight_steps,
         )
         data_path = config.datasets_dir / uitars_cache_name(scan_settings) / "data.jsonl"
         if dry_run:
@@ -492,6 +523,8 @@ def build_sft_config(config: ResolvedConfig) -> Any:
         kwargs["max_steps"] = config.training.max_steps
     else:
         kwargs["num_train_epochs"] = config.training.num_train_epochs
+    if config.dataset.format == "uitars_trace":
+        kwargs["dataset_kwargs"] = {"skip_prepare_dataset": True}
     if config.hub.push_to_hub:
         kwargs["push_to_hub"] = True
         kwargs["hub_model_id"] = config.hub.model_id

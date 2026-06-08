@@ -94,7 +94,12 @@ def tokenize_uitars_messages(
         if key in {"input_ids", "attention_mask"}:
             continue
         if isinstance(value, torch.Tensor):
-            batch[key] = value[0] if value.ndim > 1 else value
+            if key in {"input_ids", "attention_mask", "mm_token_type_ids"} and value.ndim > 1:
+                batch[key] = value[0]
+            else:
+                batch[key] = value
+        else:
+            batch[key] = value
     return batch
 
 
@@ -125,6 +130,24 @@ class UitarsTraceDataset(Dataset):
         }
 
 
+VISION_BATCH_KEYS = frozenset(
+    {"pixel_values", "image_grid_thw", "video_grid_thw", "pixel_values_videos"}
+)
+
+
+def normalize_vision_feature(key: str, value: torch.Tensor) -> torch.Tensor:
+    if key == "image_grid_thw" and value.ndim == 1 and value.numel() == 3:
+        return value.unsqueeze(0)
+    return value
+
+
+def merge_vision_features(key: str, values: list[torch.Tensor]) -> torch.Tensor:
+    normalized = [normalize_vision_feature(key, value) for value in values]
+    if key in {"pixel_values", "image_grid_thw", "video_grid_thw", "pixel_values_videos"}:
+        return torch.cat(normalized, dim=0)
+    return normalized[0] if len(normalized) == 1 else torch.stack(normalized)
+
+
 def make_uitars_data_collator(processor: Any) -> Callable[[list[dict[str, Any]]], dict[str, torch.Tensor]]:
     pad_token_id = processor.tokenizer.pad_token_id
     if pad_token_id is None:
@@ -151,11 +174,19 @@ def make_uitars_data_collator(processor: Any) -> Callable[[list[dict[str, Any]]]
                     padded = torch.nn.functional.pad(value, (0, pad_len), value=-100)
                 elif key == "attention_mask":
                     padded = torch.nn.functional.pad(value, (0, pad_len), value=0)
+                elif key in VISION_BATCH_KEYS:
+                    padded = normalize_vision_feature(key, value)
                 elif isinstance(value, torch.Tensor) and value.ndim == 1:
                     padded = torch.nn.functional.pad(value, (0, pad_len), value=0)
                 else:
                     padded = value
                 batch_tensors.setdefault(key, []).append(padded)
-        return {key: torch.stack(values) for key, values in batch_tensors.items()}
+        merged: dict[str, torch.Tensor] = {}
+        for key, values in batch_tensors.items():
+            if key in VISION_BATCH_KEYS:
+                merged[key] = merge_vision_features(key, values)
+            else:
+                merged[key] = torch.stack(values)
+        return merged
 
     return collate

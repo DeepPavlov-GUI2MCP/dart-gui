@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Literal, Sequence
+from typing import Any, Iterator, Literal, Mapping, Sequence
 
 from holo_to_uitars import convert_holo_response, parse_holo_response
 from uitars_format import UitarsFormatSettings, build_messages_from_images_and_responses
@@ -29,6 +29,13 @@ class TrajRow:
 
 
 @dataclass(frozen=True)
+class AugmentedPreflightStep:
+    step_num: int
+    preflight_step_index: int
+    response: str
+
+
+@dataclass(frozen=True)
 class TraceScanSettings:
     trace_roots: tuple[str, ...]
     task_examples_dir: str
@@ -37,6 +44,10 @@ class TraceScanSettings:
     min_result: float | None = None
     trace_source: TraceSource = "auto"
     uitars: UitarsFormatSettings = UitarsFormatSettings()
+    preflight_augmented_path: str | None = None
+    trace_root: str | None = None
+    max_rollouts: int | None = None
+    max_preflight_steps: int | None = None
 
 
 def repo_path(value: str) -> Path:
@@ -243,6 +254,163 @@ def build_uitars_per_step_rows(
     return rows
 
 
+def infer_trace_root_from_augmented_path(path: Path) -> Path:
+    resolved = path.resolve()
+    cursor = resolved.parent if resolved.is_file() else resolved
+    for parent in (cursor, *cursor.parents):
+        if parent.name == "preflight_augmented":
+            return parent.parent
+    raise ValueError(f"Could not infer trace_root from augmented path: {path}")
+
+
+def load_augmented_preflight_catalog(path: Path) -> list[dict[str, Any]]:
+    if path.is_file():
+        entries: list[dict[str, Any]] = []
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                payload = json.loads(line)
+                if isinstance(payload, dict):
+                    entries.append(payload)
+        return entries
+    if path.is_dir():
+        entries = []
+        for json_path in sorted(path.glob("*.json")):
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                entries.append(payload)
+        return entries
+    raise FileNotFoundError(f"Augmented preflight path not found: {path}")
+
+
+def parse_augmented_preflight_steps(payload: Mapping[str, Any]) -> list[AugmentedPreflightStep]:
+    raw_steps = payload.get("steps")
+    if not isinstance(raw_steps, list):
+        return []
+    steps: list[AugmentedPreflightStep] = []
+    for item in raw_steps:
+        if not isinstance(item, dict):
+            continue
+        step_num = item.get("step_num")
+        preflight_step_index = item.get("preflight_step_index")
+        response = item.get("response")
+        if not isinstance(step_num, int):
+            continue
+        if not isinstance(preflight_step_index, int):
+            continue
+        if not isinstance(response, str) or not response.strip():
+            continue
+        steps.append(
+            AugmentedPreflightStep(
+                step_num=step_num,
+                preflight_step_index=preflight_step_index,
+                response=response.strip(),
+            )
+        )
+    steps.sort(key=lambda step: (step.preflight_step_index, step.step_num))
+    return steps
+
+
+def build_holo_preflight_augmented_per_step_rows(
+    rollout_dir: Path,
+    instruction: str,
+    settings: TraceScanSettings,
+    rows: list[TrajRow],
+    augmented_steps: Sequence[AugmentedPreflightStep],
+) -> list[dict[str, Any]]:
+    if not augmented_steps:
+        return []
+    index_by_step_num = {row.step_num: idx for idx, row in enumerate(rows)}
+    format_settings = _format_settings(settings)
+    converted = [convert_holo_response(step.response) for step in augmented_steps]
+    built: list[dict[str, Any]] = []
+    for step_idx, step in enumerate(augmented_steps):
+        row_idx = index_by_step_num.get(step.step_num)
+        if row_idx is None:
+            continue
+        row = rows[row_idx]
+        if not is_preflight_row(row):
+            continue
+        image_paths = [rollout_dir / rows[i].screenshot_file for i in range(row_idx)]
+        if not image_paths or not all(path.is_file() for path in image_paths):
+            continue
+        messages = build_messages_from_images_and_responses(
+            instruction,
+            image_paths,
+            converted[:step_idx],
+            format_settings,
+            target_response=converted[step_idx],
+            stage_relative_paths=True,
+            rollout_dir=rollout_dir,
+        )
+        built.append(
+            {
+                "messages": messages,
+                "task_id": infer_domain_and_task_id(rollout_dir)[1],
+                "rollout_dir": str(rollout_dir),
+                "step_num": step.step_num,
+                "sample_mode": "per_step",
+                "loss_on_last_assistant_only": True,
+            }
+        )
+    return built
+
+
+def build_augmented_preflight_rows_for_entry(
+    trace_root: Path,
+    payload: Mapping[str, Any],
+    settings: TraceScanSettings,
+) -> list[dict[str, Any]]:
+    rollout_rel = payload.get("rollout_dir")
+    if not isinstance(rollout_rel, str) or not rollout_rel.strip():
+        return []
+    rollout_dir = (trace_root / rollout_rel.strip()).resolve()
+    if not rollout_dir.is_dir():
+        return []
+    traj_rows = load_traj_rows(rollout_dir)
+    if not traj_rows:
+        return []
+    instruction = payload.get("instruction")
+    if not isinstance(instruction, str) or not instruction.strip():
+        domain, task_id = infer_domain_and_task_id(rollout_dir)
+        instruction = load_task_instruction(repo_path(settings.task_examples_dir), domain, task_id)
+    else:
+        instruction = instruction.strip()
+    augmented_steps = parse_augmented_preflight_steps(payload)
+    if settings.max_preflight_steps is not None:
+        augmented_steps = augmented_steps[: settings.max_preflight_steps]
+    return build_holo_preflight_augmented_per_step_rows(
+        rollout_dir,
+        instruction,
+        settings,
+        traj_rows,
+        augmented_steps,
+    )
+
+
+def build_augmented_preflight_dataset_rows(settings: TraceScanSettings) -> list[dict[str, Any]]:
+    if not settings.preflight_augmented_path:
+        raise ValueError("`preflight_augmented_path` is required for augmented preflight datasets.")
+    catalog_path = repo_path(settings.preflight_augmented_path)
+    trace_root = (
+        repo_path(settings.trace_root)
+        if settings.trace_root
+        else infer_trace_root_from_augmented_path(catalog_path)
+    )
+    entries = load_augmented_preflight_catalog(catalog_path)
+    if settings.max_rollouts is not None:
+        entries = entries[: settings.max_rollouts]
+    rows: list[dict[str, Any]] = []
+    for entry in entries:
+        try:
+            rows.extend(build_augmented_preflight_rows_for_entry(trace_root, entry, settings))
+        except (FileNotFoundError, ValueError):
+            continue
+    return rows
+
+
 def build_holo_per_step_rows(
     rollout_dir: Path,
     instruction: str,
@@ -368,6 +536,8 @@ def build_rows_for_rollout(rollout_dir: Path, settings: TraceScanSettings) -> li
 
 
 def build_trace_dataset_rows(settings: TraceScanSettings) -> list[dict[str, Any]]:
+    if settings.preflight_augmented_path:
+        return build_augmented_preflight_dataset_rows(settings)
     rows: list[dict[str, Any]] = []
     for rollout_dir in iter_rollout_dirs(settings.trace_roots):
         try:
