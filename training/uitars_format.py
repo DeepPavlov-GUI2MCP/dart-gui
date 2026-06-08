@@ -5,7 +5,7 @@ import sys
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, MutableMapping, Sequence
 
 from PIL import Image
 
@@ -85,20 +85,31 @@ def staged_image_content_item(relative_path: str) -> dict[str, Any]:
     return {"type": "image", "path": relative_path}
 
 
-def resolve_staged_image_item(item: dict[str, Any], rollout_dir: Path, settings: UitarsFormatSettings) -> dict[str, Any]:
+def resolve_staged_image_item(
+    item: dict[str, Any],
+    rollout_dir: Path,
+    settings: UitarsFormatSettings,
+    image_cache: MutableMapping[Path, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if item.get("type") != "image":
         return item
     relative_path = item.get("path")
     if not isinstance(relative_path, str):
         raise ValueError("Image content item must include a string `path`.")
-    image = load_resized_image(rollout_dir / relative_path, settings)
-    return image_content_item(image)
+    image_path = (rollout_dir / relative_path).resolve()
+    if image_cache is not None and image_path in image_cache:
+        return image_cache[image_path]
+    resolved = image_content_item(load_resized_image(image_path, settings))
+    if image_cache is not None:
+        image_cache[image_path] = resolved
+    return resolved
 
 
 def resolve_staged_messages(
     messages: Sequence[dict[str, Any]],
     rollout_dir: Path,
     settings: UitarsFormatSettings,
+    image_cache: MutableMapping[Path, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     resolved: list[dict[str, Any]] = []
     for message in messages:
@@ -110,7 +121,9 @@ def resolve_staged_messages(
             {
                 "role": role,
                 "content": [
-                    resolve_staged_image_item(item, rollout_dir, settings) if isinstance(item, dict) else item
+                    resolve_staged_image_item(item, rollout_dir, settings, image_cache)
+                    if isinstance(item, dict)
+                    else item
                     for item in content
                 ],
             }
@@ -148,7 +161,6 @@ def build_messages_from_images_and_responses(
         windowed_paths = windowed_paths[-settings.history_n :]
     offset = len(image_paths) - len(windowed_paths)
 
-    images = [load_resized_image(path, settings) for path in windowed_paths]
     windowed_responses = list(history_responses)[offset:]
 
     user_prompt = build_user_prompt(instruction, settings)
@@ -164,7 +176,8 @@ def build_messages_from_images_and_responses(
             relative = windowed_paths[path_index].relative_to(rollout_dir).as_posix()
             messages.append({"role": "user", "content": [staged_image_content_item(relative)]})
         else:
-            messages.append({"role": "user", "content": [image_content_item(images[path_index])]})
+            image = load_resized_image(windowed_paths[path_index], settings)
+            messages.append({"role": "user", "content": [image_content_item(image)]})
 
     image_num = 0
     if windowed_responses:

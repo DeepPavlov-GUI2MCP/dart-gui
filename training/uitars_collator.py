@@ -20,6 +20,33 @@ def find_assistant_indices(messages: Sequence[dict[str, Any]]) -> list[int]:
     return [idx for idx, message in enumerate(messages) if message.get("role") == "assistant"]
 
 
+def image_token_lengths(processor: Any, full_inputs: dict[str, Any]) -> list[int]:
+    image_grid_thw = full_inputs.get("image_grid_thw")
+    if image_grid_thw is None:
+        return []
+    merge_size = getattr(getattr(processor, "image_processor", None), "merge_size", 2)
+    merge_length = int(merge_size) ** 2
+    return [int(grid.prod().item()) // merge_length for grid in image_grid_thw]
+
+
+def chat_template_token_length(
+    processor: Any,
+    messages: Sequence[dict[str, Any]],
+    *,
+    add_generation_prompt: bool,
+    image_lengths: Sequence[int],
+) -> int:
+    text = processor.apply_chat_template(
+        list(messages),
+        tokenize=False,
+        add_generation_prompt=add_generation_prompt,
+    )
+    input_ids = processor.tokenizer(text, add_special_tokens=False)["input_ids"]
+    image_token_id = processor.tokenizer.convert_tokens_to_ids("<|image_pad|>")
+    image_count = input_ids.count(image_token_id)
+    return len(input_ids) + sum(image_lengths[:image_count]) - image_count
+
+
 def tokenize_uitars_messages(
     processor: Any,
     messages: Sequence[dict[str, Any]],
@@ -35,6 +62,7 @@ def tokenize_uitars_messages(
     )
     input_ids = full_inputs["input_ids"][0]
     labels = input_ids.clone()
+    image_lengths = image_token_lengths(processor, full_inputs)
 
     if loss_on_last_assistant_only:
         assistant_indices = find_assistant_indices(messages)
@@ -42,14 +70,12 @@ def tokenize_uitars_messages(
             raise ValueError("Expected at least one assistant message.")
         last_assistant_idx = assistant_indices[-1]
         prefix_messages = list(messages[:last_assistant_idx])
-        prefix_inputs = processor.apply_chat_template(
+        prefix_len = chat_template_token_length(
+            processor,
             prefix_messages,
-            tokenize=True,
             add_generation_prompt=True,
-            return_dict=True,
-            return_tensors="pt",
+            image_lengths=image_lengths,
         )
-        prefix_len = int(prefix_inputs["input_ids"].shape[-1])
         labels[:prefix_len] = -100
     else:
         labels[:] = -100
@@ -59,24 +85,20 @@ def tokenize_uitars_messages(
             end_idx = assistant_idx + 1
             prefix_messages = list(messages[:start_idx])
             if prefix_messages:
-                prefix_inputs = processor.apply_chat_template(
+                prefix_len = chat_template_token_length(
+                    processor,
                     prefix_messages,
-                    tokenize=True,
                     add_generation_prompt=True,
-                    return_dict=True,
-                    return_tensors="pt",
+                    image_lengths=image_lengths,
                 )
-                prefix_len = int(prefix_inputs["input_ids"].shape[-1])
             else:
                 prefix_len = 0
-            through_inputs = processor.apply_chat_template(
+            end_len = chat_template_token_length(
+                processor,
                 list(messages[:end_idx]),
-                tokenize=True,
                 add_generation_prompt=False,
-                return_dict=True,
-                return_tensors="pt",
+                image_lengths=image_lengths,
             )
-            end_len = int(through_inputs["input_ids"].shape[-1])
             labels[prefix_len:end_len] = input_ids[prefix_len:end_len]
 
     attention_mask = full_inputs.get("attention_mask")
@@ -110,6 +132,7 @@ class UitarsTraceDataset(Dataset):
         settings: UitarsFormatSettings,
     ) -> None:
         self.settings = settings
+        self.image_cache: dict[Path, dict[str, Any]] = {}
         self.rows: list[dict[str, Any]] = []
         with open(data_path, encoding="utf-8") as f:
             for line in f:
@@ -123,7 +146,7 @@ class UitarsTraceDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         row = self.rows[index]
         rollout_dir = Path(row["rollout_dir"])
-        messages = resolve_staged_messages(row["messages"], rollout_dir, self.settings)
+        messages = resolve_staged_messages(row["messages"], rollout_dir, self.settings, self.image_cache)
         return {
             "messages": messages,
             "loss_on_last_assistant_only": bool(row.get("loss_on_last_assistant_only", True)),
