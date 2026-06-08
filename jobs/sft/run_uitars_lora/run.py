@@ -8,11 +8,13 @@ import sys
 from pathlib import Path
 
 requested_python = os.environ.get("DART_SFT_PYTHON", "").strip()
-if requested_python and Path(sys.executable).resolve() != Path(requested_python).resolve():
+if requested_python:
     if not Path(requested_python).is_file():
         print(f"error: DART_SFT_PYTHON does not exist: {requested_python}", file=sys.stderr)
         raise SystemExit(1)
-    os.execv(requested_python, [requested_python, __file__, *sys.argv[1:]])
+    requested_prefix = Path(requested_python).parent.parent.resolve()
+    if Path(sys.prefix).resolve() != requested_prefix:
+        os.execv(requested_python, [requested_python, __file__, *sys.argv[1:]])
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 TRAINING_DIR = REPO_ROOT / "training"

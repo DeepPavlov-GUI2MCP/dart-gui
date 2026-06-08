@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-import sys
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -9,12 +8,7 @@ from typing import Any, MutableMapping, Sequence
 
 from PIL import Image
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-GUI_DOCKER_ENV = REPO_ROOT / "GUI-Docker-Env"
-if str(GUI_DOCKER_ENV) not in sys.path:
-    sys.path.insert(0, str(GUI_DOCKER_ENV))
-
-from mm_agents.uitars15_v1 import (  # noqa: E402
+from uitars15_format import (
     UITARS_NORMAL_ACTION_SPACE,
     UITARS_USR_PROMPT_THOUGHT,
     add_box_token,

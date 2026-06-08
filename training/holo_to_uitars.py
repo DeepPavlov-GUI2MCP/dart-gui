@@ -22,7 +22,7 @@ from mm_agents.holo.schema import (  # noqa: E402
     WaitArgs,
     WriteArgs,
 )
-from mm_agents.uitars15_v1 import add_box_token  # noqa: E402
+from uitars15_format import add_box_token
 
 
 def _escape_type_content(content: str) -> str:

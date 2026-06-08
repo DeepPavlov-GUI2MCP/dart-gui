@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
 import torch
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 from uitars_format import UitarsFormatSettings, resolve_staged_messages
 
@@ -217,13 +220,31 @@ def make_uitars_data_collator(processor: Any) -> Callable[[list[dict[str, Any]]]
 
 class PretokenizedUitarsDataset(Dataset):
     def __init__(self, pretokenized_dir: Path) -> None:
+        shard_paths = sorted(Path(pretokenized_dir).glob("shard-*.pt"))
+        if not shard_paths:
+            raise ValueError(f"No pretokenized shards found under {pretokenized_dir}")
+
+        rank = os.environ.get("RANK", os.environ.get("LOCAL_RANK", "0"))
         self.records: list[dict[str, Any]] = []
-        for shard_path in sorted(Path(pretokenized_dir).glob("shard-*.pt")):
+        progress = tqdm(
+            shard_paths,
+            desc=f"rank {rank} loading pretokenized shards",
+            unit="shard",
+            mininterval=1.0,
+            file=sys.stderr,
+        )
+        for shard_path in progress:
             payload = torch.load(shard_path, weights_only=False)
             if isinstance(payload, list):
                 self.records.extend(item for item in payload if isinstance(item, dict))
+                progress.set_postfix(records=len(self.records), last=shard_path.name, refresh=False)
+        progress.close()
         if not self.records:
             raise ValueError(f"No pretokenized records found under {pretokenized_dir}")
+        print(
+            f"Loaded {len(self.records)} pretokenized records from {len(shard_paths)} shards",
+            file=sys.stderr,
+        )
 
     def __len__(self) -> int:
         return len(self.records)
