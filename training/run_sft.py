@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -111,6 +112,7 @@ class TrainingSettings:
     gradient_checkpointing: bool = True
     fp16: bool = True
     bf16: bool = False
+    ddp_find_unused_parameters: bool = False
 
 
 @dataclass(frozen=True)
@@ -357,6 +359,7 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         gradient_checkpointing=get_optional_bool(training_cfg, "gradient_checkpointing", True),
         fp16=get_optional_bool(training_cfg, "fp16", True),
         bf16=get_optional_bool(training_cfg, "bf16", False),
+        ddp_find_unused_parameters=get_optional_bool(training_cfg, "ddp_find_unused_parameters", False),
     )
 
     resolved_hub = HubSettings(
@@ -378,6 +381,49 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         hf=HuggingFaceSettings(api_key=resolve_secret(get_optional_str(hf_cfg, "api_key"))),
         hub=resolved_hub,
     )
+
+
+def is_distributed() -> bool:
+    return int(os.environ.get("WORLD_SIZE", "1")) > 1
+
+
+def get_local_rank() -> int:
+    return int(os.environ.get("LOCAL_RANK", "0"))
+
+
+def is_main_process() -> bool:
+    return get_local_rank() == 0
+
+
+def init_distributed() -> None:
+    if not is_distributed():
+        return
+    import torch
+
+    if torch.distributed.is_initialized():
+        return
+    local_rank = get_local_rank()
+    if torch.cuda.is_available():
+        torch.cuda.set_device(local_rank)
+    torch.distributed.init_process_group(backend="nccl")
+
+
+def distributed_barrier() -> None:
+    if not is_distributed():
+        return
+    import torch
+
+    if not torch.distributed.is_initialized():
+        init_distributed()
+    torch.distributed.barrier()
+
+
+def wait_for_path(path: Path, *, timeout_s: float = 3600.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while not path.is_file():
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"Timed out waiting for staged dataset: {path}")
+        time.sleep(1)
 
 
 def configure_hf_env(config: ResolvedConfig) -> None:
@@ -411,6 +457,29 @@ def validate_hub_write(config: ResolvedConfig, *, skip: bool) -> None:
     )
 
 
+def resolve_staged_data_path(config: ResolvedConfig) -> Path:
+    if config.dataset.format == "uitars_trace":
+        scan_settings = TraceScanSettings(
+            trace_roots=config.dataset.trace_roots,
+            task_examples_dir=config.dataset.task_examples_dir or "",
+            sample_mode=config.dataset.sample_mode,
+            history_n=config.dataset.history_n,
+            min_result=config.dataset.min_result,
+            trace_source=config.dataset.trace_source,  # type: ignore[arg-type]
+            uitars=config.dataset.uitars,
+            preflight_augmented_path=config.dataset.preflight_augmented_path,
+            trace_root=config.dataset.trace_root,
+            max_rollouts=config.dataset.max_rollouts,
+            max_preflight_steps=config.dataset.max_preflight_steps,
+            goal_variants=config.dataset.goal_variants,
+            max_goal_variants=config.dataset.max_goal_variants,
+            task_generation_root=config.dataset.task_generation_root,
+            pretokenized_traces_dir=config.dataset.pretokenized_traces_dir,
+        )
+        return config.datasets_dir / uitars_cache_name(scan_settings) / "data.jsonl"
+    return config.datasets_dir / dataset_cache_name(config.dataset) / "data.jsonl"
+
+
 def stage_dataset(config: ResolvedConfig, *, dry_run: bool = False) -> Path:
     if config.dataset.format == "uitars_trace":
         scan_settings = TraceScanSettings(
@@ -430,7 +499,7 @@ def stage_dataset(config: ResolvedConfig, *, dry_run: bool = False) -> Path:
             task_generation_root=config.dataset.task_generation_root,
             pretokenized_traces_dir=config.dataset.pretokenized_traces_dir,
         )
-        data_path = config.datasets_dir / uitars_cache_name(scan_settings) / "data.jsonl"
+        data_path = resolve_staged_data_path(config)
         if dry_run:
             rows = build_trace_dataset_rows(scan_settings)
             if rows and (not data_path.is_file() or config.dataset.refresh):
@@ -446,8 +515,8 @@ def stage_dataset(config: ResolvedConfig, *, dry_run: bool = False) -> Path:
     if not config.dataset.repo_id:
         raise ValueError("`dataset.repo_id` is required for chat datasets.")
 
-    dataset_dir = config.datasets_dir / dataset_cache_name(config.dataset)
-    data_path = dataset_dir / "data.jsonl"
+    data_path = resolve_staged_data_path(config)
+    dataset_dir = data_path.parent
     if data_path.is_file() and not config.dataset.refresh:
         return data_path
 
@@ -560,7 +629,16 @@ def build_sft_config(config: ResolvedConfig) -> Any:
         kwargs["hub_model_id"] = config.hub.model_id
         if config.hub.revision:
             kwargs["hub_revision"] = config.hub.revision
+    kwargs.update(distributed_sft_overrides(config))
     return SFTConfig(**kwargs)
+
+
+def distributed_sft_overrides(config: ResolvedConfig) -> dict[str, Any]:
+    if not is_distributed():
+        return {}
+    return {
+        "ddp_find_unused_parameters": config.training.ddp_find_unused_parameters,
+    }
 
 
 def load_model_and_processor(config: ResolvedConfig):
@@ -584,9 +662,14 @@ def load_model_and_processor(config: ResolvedConfig):
 
     model_kwargs: dict[str, Any] = {
         "trust_remote_code": trust_remote_code,
-        "device_map": "auto",
         "torch_dtype": torch.float16,
     }
+    if is_distributed():
+        local_rank = get_local_rank()
+        if torch.cuda.is_available():
+            torch.cuda.set_device(local_rank)
+    else:
+        model_kwargs["device_map"] = "auto"
 
     if use_vision:
         model = AutoModelForImageTextToText.from_pretrained(config.model.base_model, **model_kwargs)
@@ -623,6 +706,21 @@ def print_dry_run_summary(
     print(f"Training: {sft_config}")
 
 
+def prepare_staged_dataset(
+    config: ResolvedConfig,
+    *,
+    dry_run: bool = False,
+) -> Path:
+    data_path = resolve_staged_data_path(config)
+    if is_main_process():
+        data_path = stage_dataset(config, dry_run=dry_run)
+    if is_distributed():
+        distributed_barrier()
+        if not is_main_process():
+            wait_for_path(data_path)
+    return data_path
+
+
 def train(
     config: ResolvedConfig,
     data_path: Path | None = None,
@@ -631,7 +729,12 @@ def train(
 ) -> None:
     from trl import SFTTrainer
 
-    config.output_dir.mkdir(parents=True, exist_ok=True)
+    if is_distributed():
+        init_distributed()
+    if is_main_process():
+        config.output_dir.mkdir(parents=True, exist_ok=True)
+    if is_distributed():
+        distributed_barrier()
     sft_config = build_sft_config(config)
     model, processor, tokenizer, peft_config = load_model_and_processor(config)
 
@@ -665,9 +768,10 @@ def train(
 
     trainer = SFTTrainer(**trainer_kwargs)
     trainer.train()
-    trainer.save_model(str(config.output_dir))
-    if config.hub.push_to_hub:
-        trainer.push_to_hub()
+    if is_main_process():
+        trainer.save_model(str(config.output_dir))
+        if config.hub.push_to_hub:
+            trainer.push_to_hub()
 
 
 def repo_path(value: str) -> Path:
@@ -793,22 +897,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     reject_mixed_config_usage(parser, raw_argv, args)
     config = load_config_file(args.config) if args.config else resolve_args(args)
     configure_hf_env(config)
-    validate_hub_write(config, skip=args.skip_hf_validation)
+    if is_main_process():
+        validate_hub_write(config, skip=args.skip_hf_validation)
     pretokenized_dir: Path | None = None
     if args.from_pretokenized_traces:
         pretokenized_dir = repo_path(args.from_pretokenized_traces)
     elif config.dataset.pretokenized_traces_dir:
         pretokenized_dir = repo_path(config.dataset.pretokenized_traces_dir)
-    sft_config = build_sft_config(config)
     if pretokenized_dir is not None:
         if args.dry_run:
-            print_dry_run_summary(config, None, sft_config, pretokenized_dir=pretokenized_dir)
+            if is_main_process():
+                print_dry_run_summary(config, None, build_sft_config(config), pretokenized_dir=pretokenized_dir)
             return 0
         train(config, pretokenized_dir=pretokenized_dir)
         return 0
-    data_path = stage_dataset(config, dry_run=args.dry_run)
+    data_path = prepare_staged_dataset(config, dry_run=args.dry_run)
     if args.dry_run:
-        print_dry_run_summary(config, data_path, sft_config)
+        if is_main_process():
+            print_dry_run_summary(config, data_path, build_sft_config(config))
         return 0
     train(config, data_path)
     return 0

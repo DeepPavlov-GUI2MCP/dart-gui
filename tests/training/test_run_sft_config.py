@@ -248,6 +248,32 @@ def test_resolve_goal_variants_config_from_fixture():
     )
 
 
+def test_distributed_sft_overrides(monkeypatch):
+    run_sft = import_training_module("run_sft")
+    config = run_sft.load_config_file(str(SFT_CONFIG))
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    assert run_sft.distributed_sft_overrides(config) == {}
+
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    assert run_sft.distributed_sft_overrides(config) == {"ddp_find_unused_parameters": False}
+
+
+def test_is_distributed_helpers(monkeypatch):
+    run_sft = import_training_module("run_sft")
+    monkeypatch.delenv("WORLD_SIZE", raising=False)
+    monkeypatch.delenv("LOCAL_RANK", raising=False)
+    assert run_sft.is_distributed() is False
+    assert run_sft.is_main_process() is True
+
+    monkeypatch.setenv("WORLD_SIZE", "4")
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    assert run_sft.is_distributed() is True
+    assert run_sft.is_main_process() is True
+
+    monkeypatch.setenv("LOCAL_RANK", "3")
+    assert run_sft.is_main_process() is False
+
+
 def test_dry_run_subprocess_holo_fixture():
     result = subprocess.run(
         [
