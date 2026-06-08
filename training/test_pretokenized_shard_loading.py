@@ -8,6 +8,7 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
+from torch.utils.data import DataLoader
 
 from uitars_collator import PretokenizedUitarsDataset, make_pretokenized_collator
 
@@ -15,6 +16,9 @@ from uitars_collator import PretokenizedUitarsDataset, make_pretokenized_collato
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pretokenized-dir", type=Path, required=True)
+    parser.add_argument("--batch-size", type=int, default=2)
+    parser.add_argument("--dataloader-num-workers", type=int, default=0)
+    parser.add_argument("--dataloader-prefetch-factor", type=int, default=2)
     args = parser.parse_args()
 
     rank = 0
@@ -35,18 +39,18 @@ def main() -> None:
     record_count = 0
     collate_batches = 0
     collator = make_pretokenized_collator(pad_token_id=0)
-    pending: list[dict] = []
+    loader_kwargs = {
+        "batch_size": args.batch_size,
+        "collate_fn": collator,
+        "num_workers": args.dataloader_num_workers,
+    }
+    if args.dataloader_num_workers > 0:
+        loader_kwargs["prefetch_factor"] = args.dataloader_prefetch_factor
+        loader_kwargs["persistent_workers"] = True
+    dataloader = DataLoader(dataset, **loader_kwargs)
 
-    for item in dataset:
-        record_count += 1
-        pending.append(item)
-        if len(pending) == 2:
-            collator(pending)
-            collate_batches += 1
-            pending = []
-
-    if pending:
-        collator(pending)
+    for batch in dataloader:
+        record_count += int(batch["input_ids"].shape[0])
         collate_batches += 1
 
     if dist.is_initialized():

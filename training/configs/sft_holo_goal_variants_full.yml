@@ -46,6 +46,9 @@ train_sft:
     gradient_checkpointing: true
     bf16: true
     fp16: false
+    dataloader_num_workers: 6
+    dataloader_prefetch_factor: 2
+    dataloader_persistent_workers: true
 
   lora:
     r: 16

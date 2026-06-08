@@ -116,6 +116,9 @@ class TrainingSettings:
     fp16: bool = False
     bf16: bool = True
     ddp_find_unused_parameters: bool = False
+    dataloader_num_workers: int | None = None
+    dataloader_prefetch_factor: int | None = None
+    dataloader_persistent_workers: bool = False
 
 
 @dataclass(frozen=True)
@@ -363,6 +366,9 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         fp16=get_optional_bool(training_cfg, "fp16", False),
         bf16=get_optional_bool(training_cfg, "bf16", True),
         ddp_find_unused_parameters=get_optional_bool(training_cfg, "ddp_find_unused_parameters", False),
+        dataloader_num_workers=get_optional_nullable_int(training_cfg, "dataloader_num_workers"),
+        dataloader_prefetch_factor=get_optional_nullable_int(training_cfg, "dataloader_prefetch_factor"),
+        dataloader_persistent_workers=get_optional_bool(training_cfg, "dataloader_persistent_workers", False),
     )
 
     resolved_hub = HubSettings(
@@ -716,6 +722,15 @@ def build_sft_config(config: ResolvedConfig, *, pretokenized: bool = False) -> A
             kwargs["hub_revision"] = config.hub.revision
     if pretokenized:
         kwargs["accelerator_config"] = {"dispatch_batches": False}
+        num_workers = 2 if config.training.dataloader_num_workers is None else config.training.dataloader_num_workers
+        kwargs["dataloader_num_workers"] = num_workers
+        if config.training.dataloader_prefetch_factor is not None:
+            kwargs["dataloader_prefetch_factor"] = config.training.dataloader_prefetch_factor
+        elif num_workers > 0:
+            kwargs["dataloader_prefetch_factor"] = 2
+        kwargs["dataloader_persistent_workers"] = (
+            config.training.dataloader_persistent_workers or num_workers > 0
+        )
     kwargs.update(distributed_sft_overrides(config))
     return SFTConfig(**kwargs)
 
@@ -972,6 +987,15 @@ def get_optional_str(root: Mapping[str, Any], key: str, default: str | None = No
 
 def get_optional_int(root: Mapping[str, Any], key: str, default: int) -> int:
     value = root.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"`{key}` must be an integer.")
+    return value
+
+
+def get_optional_nullable_int(root: Mapping[str, Any], key: str) -> int | None:
+    value = root.get(key)
+    if value is None:
+        return None
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"`{key}` must be an integer.")
     return value
