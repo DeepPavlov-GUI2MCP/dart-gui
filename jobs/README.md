@@ -78,5 +78,15 @@ docker push "$REGISTRY_PATH/$IMAGE_NAME"
 export DART_JOB_IMAGE="$REGISTRY_PATH/$IMAGE_NAME"
 export DART_SFT_CONFIG="training/configs/sft_holo_goal_variants_example.yml"
 export DART_JOB_GPUS_PER_NODE=2
+export DART_JOB_NUM_NODES=4
 python jobs/submit.py sft
+```
+
+SFT jobs write outputs under a shared timestamped folder on NFS:
+
+```text
+<config output_dir>/<DART_SFT_RUN_ID>/
+  logs/rank-00000.log
+  logs/rank-00001.log
+  run_metadata.json
 ```

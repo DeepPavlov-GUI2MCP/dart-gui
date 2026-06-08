@@ -6,9 +6,10 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Sequence, TextIO
 
 import yaml
 
@@ -26,6 +27,7 @@ from uitars_trace_dataset import TraceScanSettings, build_trace_dataset_rows
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+_LOG_HANDLES: list[TextIO] = []
 
 VISION_MODEL_TYPES = frozenset(
     {
@@ -392,8 +394,84 @@ def get_local_rank() -> int:
     return int(os.environ.get("LOCAL_RANK", "0"))
 
 
+def get_global_rank() -> int:
+    return int(os.environ.get("RANK", "0"))
+
+
 def is_main_process() -> bool:
-    return get_local_rank() == 0
+    return get_global_rank() == 0
+
+
+class Tee:
+    def __init__(self, *streams: TextIO) -> None:
+        self.streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self.streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.streams[0], name)
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def timestamped_output_enabled() -> bool:
+    return env_flag("DART_SFT_TIMESTAMPED_OUTPUT") or bool(os.environ.get("DART_SFT_RUN_ID"))
+
+
+def apply_timestamped_output_dir(config: ResolvedConfig) -> ResolvedConfig:
+    if not timestamped_output_enabled():
+        return config
+    run_id = os.environ.get("DART_SFT_RUN_ID", "").strip()
+    if not run_id:
+        run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        os.environ["DART_SFT_RUN_ID"] = run_id
+    run_root = os.environ.get("DART_SFT_RUN_ROOT", "").strip()
+    output_root = repo_path(run_root) if run_root else config.output_dir
+    return replace(config, output_dir=output_root / run_id)
+
+
+def setup_rank_log(output_dir: Path) -> Path | None:
+    if not env_flag("DART_SFT_SAVE_RANK_LOGS"):
+        return None
+    logs_dir = output_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / f"rank-{get_global_rank():05d}.log"
+    handle = open(log_path, "a", encoding="utf-8", buffering=1)
+    _LOG_HANDLES.append(handle)
+    sys.stdout = Tee(sys.stdout, handle)  # type: ignore[assignment]
+    sys.stderr = Tee(sys.stderr, handle)  # type: ignore[assignment]
+    return log_path
+
+
+def write_run_metadata(config: ResolvedConfig) -> None:
+    if not timestamped_output_enabled() or not is_main_process():
+        return
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "run_id": os.environ.get("DART_SFT_RUN_ID", ""),
+        "config_path": config.config_path,
+        "output_dir": str(config.output_dir),
+        "world_size": int(os.environ.get("WORLD_SIZE", "1")),
+        "created_at_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    with open(config.output_dir / "run_metadata.json", "w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, indent=2, sort_keys=True)
+        handle.write("\n")
 
 
 def init_distributed() -> None:
@@ -931,6 +1009,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     reject_mixed_config_usage(parser, raw_argv, args)
     configure_hf_hub()
     config = load_config_file(args.config) if args.config else resolve_args(args)
+    config = apply_timestamped_output_dir(config)
+    setup_rank_log(config.output_dir)
+    write_run_metadata(config)
     configure_hf_env(config)
     if is_main_process():
         validate_hub_write(config, skip=args.skip_hf_validation)

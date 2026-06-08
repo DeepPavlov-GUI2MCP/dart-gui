@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -83,6 +84,14 @@ def require_sft_config() -> str:
     return config
 
 
+def resolve_sft_run_id() -> str:
+    run_id = os.environ.get("DART_SFT_RUN_ID", "").strip()
+    if not run_id:
+        run_id = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        os.environ["DART_SFT_RUN_ID"] = run_id
+    return run_id
+
+
 def base_job_kwargs(*, script_rel: str, default_image: str | None = None) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
         "job_desc": f"{USR_NAME} | {PRJ_TAGS}",
@@ -104,6 +113,9 @@ def build_sft_env() -> dict[str, str]:
     env_variables: dict[str, str] = {
         "PYTHONPATH": repo_path(),
         "DART_SFT_CONFIG": require_sft_config(),
+        "DART_SFT_RUN_ID": resolve_sft_run_id(),
+        "DART_SFT_SAVE_RANK_LOGS": os.environ.get("DART_SFT_SAVE_RANK_LOGS", "1"),
+        "DART_SFT_TIMESTAMPED_OUTPUT": os.environ.get("DART_SFT_TIMESTAMPED_OUTPUT", "1"),
         "NCCL_DEBUG": os.environ.get("DART_NCCL_DEBUG", "WARN"),
         "PYTORCH_CUDA_ALLOC_CONF": os.environ.get(
             "DART_PYTORCH_CUDA_ALLOC_CONF",
@@ -119,6 +131,9 @@ def build_sft_env() -> dict[str, str]:
     pretokenized_dir = os.environ.get("DART_SFT_PRETOKENIZED_DIR", "").strip()
     if pretokenized_dir:
         env_variables["DART_SFT_PRETOKENIZED_DIR"] = pretokenized_dir
+    run_root = os.environ.get("DART_SFT_RUN_ROOT", "").strip()
+    if run_root:
+        env_variables["DART_SFT_RUN_ROOT"] = run_root
     env_variables.update(hf_hub_env())
     env_variables.update(forward_hf_token_env())
     return env_variables
