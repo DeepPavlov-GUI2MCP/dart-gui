@@ -27,7 +27,7 @@ if not config:
     raise SystemExit(1)
 
 pretokenized_dir = os.environ.get("DART_SFT_PRETOKENIZED_DIR", "").strip()
-argv = ["run_sft.py", "--config", config]
+argv = ["--config", config]
 if pretokenized_dir:
     argv.extend(["--from-pretokenized-traces", pretokenized_dir])
 

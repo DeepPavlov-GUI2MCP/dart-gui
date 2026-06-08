@@ -67,10 +67,12 @@ The submitter creates a Cloud.ru `client_lib.Job` with:
 - `processes_per_worker=DART_JOB_GPUS_PER_NODE`
 - `pytorch_use_env=True`
 
-Cloud.ru sets PyTorch distributed environment variables such as `RANK`,
-`WORLD_SIZE`, and `LOCAL_RANK`; `training/run_sft.py` reads those directly and
-initializes NCCL with `torch.distributed.init_process_group()`. Only global
-rank 0 writes final model artifacts or pushes to Hub.
+Do not wrap the Cloud job script in `torchrun`. ML Space starts the configured
+number of worker processes for `pytorch2` jobs and sets PyTorch distributed
+environment variables such as `RANK`, `WORLD_SIZE`, and `LOCAL_RANK`.
+`training/run_sft.py` reads those directly and initializes NCCL with
+`torch.distributed.init_process_group()`. Only global rank 0 writes final model
+artifacts or pushes to Hub.
 
 Each submitted job writes to a common timestamped NFS folder:
 
