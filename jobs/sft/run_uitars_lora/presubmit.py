@@ -140,11 +140,12 @@ def validate_pretokenized_dataset(config_path: str) -> run_sft.ResolvedConfig:
             fail(str(exc))
 
     with stage("validate split metadata"):
-        from microaction_split import load_split, validate_split_for_training_rows
+        from microaction_split import load_split, split_path, validate_split_for_training_rows
 
-        split = load_split(pretokenized_dir)
+        smoke_microactions = config.dataset.smoke_microactions
+        split = load_split(pretokenized_dir, smoke_microactions=smoke_microactions)
         if split is None:
-            fail(f"missing pretokenized split metadata: {pretokenized_dir / 'split.json'}")
+            fail(f"missing pretokenized split metadata: {split_path(pretokenized_dir, smoke_microactions=smoke_microactions)}")
         split_rows = rows if rows else load_jsonl_rows(staged_jsonl)
         try:
             validate_split_for_training_rows(

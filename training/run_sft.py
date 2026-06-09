@@ -935,10 +935,11 @@ def ensure_pretokenized_split(config: ResolvedConfig, pretokenized_dir: Path) ->
         max_goal_variants=config.dataset.max_goal_variants,
         smoke_microactions=config.dataset.smoke_microactions,
     )
-    existing = load_split(pretokenized_dir)
+    smoke_microactions = config.dataset.smoke_microactions
+    existing = load_split(pretokenized_dir, smoke_microactions=smoke_microactions)
     if existing is not None and existing.to_dict() == split.to_dict():
         return
-    write_split(pretokenized_dir, split)
+    write_split(pretokenized_dir, split, smoke_microactions=smoke_microactions)
 
 
 def train(
@@ -966,6 +967,7 @@ def train(
         train_dataset = PretokenizedUitarsDataset(
             pretokenized_dir,
             split=config.dataset.pretokenized_split,
+            smoke_microactions=config.dataset.smoke_microactions,
         )
         pad_token_id = processor.tokenizer.pad_token_id
         if pad_token_id is None:
@@ -989,7 +991,11 @@ def train(
         and config.training.eval_every_n_epochs > 0
         and config.dataset.pretokenized_split == "train"
     ):
-        eval_dataset = PretokenizedUitarsDataset(pretokenized_dir, split="val")
+        eval_dataset = PretokenizedUitarsDataset(
+            pretokenized_dir,
+            split="val",
+            smoke_microactions=config.dataset.smoke_microactions,
+        )
         if len(eval_dataset) == 0:
             eval_dataset = None
 

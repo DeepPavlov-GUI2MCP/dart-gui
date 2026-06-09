@@ -405,7 +405,7 @@ def write_pretokenized_split(
         max_goal_variants=settings.max_goal_variants,
         smoke_microactions=settings.smoke_microactions,
     )
-    write_split(output_dir, split)
+    write_split(output_dir, split, smoke_microactions=settings.smoke_microactions)
     return split
 
 
@@ -436,9 +436,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             output_dir = str(data_path.parent / pretokenized_cache_dir_name(settings))
         rows_only = [row for _, row in indexed_rows]
         split = write_pretokenized_split(Path(output_dir), rows_only, settings)
+        from microaction_split import split_path
+
         LOGGER.info(
             "[summary] wrote split to %s train_tasks=%d val_tasks=%d train_rows=%d val_rows=%d wall_s=%.3fs",
-            Path(output_dir) / "split.json",
+            split_path(Path(output_dir), smoke_microactions=settings.smoke_microactions),
             len(split.train_task_ids),
             len(split.val_task_ids),
             split.train_rows,

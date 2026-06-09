@@ -10,8 +10,8 @@ from uitars_trace_dataset import repo_path
 
 
 SPLIT_FILENAME = "split.json"
-SPLIT_STRATEGY = "one_task_per_microaction"
-SMOKE_SPLIT_STRATEGY = "smoke_four_microactions"
+SPLIT_FILENAME_SMOKE = "split-smoke.json"
+SPLIT_STRATEGY = "one_holdout_task_per_microaction"
 HOLDOUT_RULE = "min_task_index"
 SMOKE_TASKS_PER_MICROACTION = 4
 SMOKE_TRAIN_TASKS_PER_MICROACTION = 3
@@ -100,13 +100,29 @@ class MicroactionSplit:
         )
 
 
-def split_path(pretokenized_dir: Path) -> Path:
-    return Path(pretokenized_dir) / SPLIT_FILENAME
+def split_filename(*, smoke_microactions: int | None = None) -> str:
+    if smoke_microactions is not None:
+        return SPLIT_FILENAME_SMOKE
+    return SPLIT_FILENAME
 
 
-def load_split(pretokenized_dir: Path) -> MicroactionSplit | None:
-    path = split_path(pretokenized_dir)
-    if not path.is_file():
+def split_path(pretokenized_dir: Path, *, smoke_microactions: int | None = None) -> Path:
+    return Path(pretokenized_dir) / split_filename(smoke_microactions=smoke_microactions)
+
+
+def load_split(
+    pretokenized_dir: Path,
+    *,
+    smoke_microactions: int | None = None,
+) -> MicroactionSplit | None:
+    path = split_path(pretokenized_dir, smoke_microactions=smoke_microactions)
+    if not path.is_file() and smoke_microactions is not None:
+        legacy = split_path(pretokenized_dir)
+        if legacy.is_file():
+            path = legacy
+        else:
+            return None
+    elif not path.is_file():
         return None
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -114,8 +130,13 @@ def load_split(pretokenized_dir: Path) -> MicroactionSplit | None:
     return MicroactionSplit.from_dict(payload)
 
 
-def write_split(pretokenized_dir: Path, split: MicroactionSplit) -> Path:
-    path = split_path(pretokenized_dir)
+def write_split(
+    pretokenized_dir: Path,
+    split: MicroactionSplit,
+    *,
+    smoke_microactions: int | None = None,
+) -> Path:
+    path = split_path(pretokenized_dir, smoke_microactions=smoke_microactions)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(split.to_dict(), indent=2) + "\n", encoding="utf-8")
     return path
@@ -404,7 +425,7 @@ def compute_smoke_microaction_split(
         rows_per_task=rows_per_task,
     )
     return MicroactionSplit(
-        strategy=SMOKE_SPLIT_STRATEGY,
+        strategy=SPLIT_STRATEGY,
         holdout_rule=HOLDOUT_RULE,
         task_examples_dir=str(task_examples_path),
         task_generation_root=str(generation_root) if generation_root is not None else None,

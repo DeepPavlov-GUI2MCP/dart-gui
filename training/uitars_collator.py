@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import Dataset, IterableDataset, get_worker_info
 from tqdm import tqdm
 
-from microaction_split import load_split, normalize_pretokenized_split
+from microaction_split import load_split, normalize_pretokenized_split, split_path
 from uitars_format import UitarsFormatSettings, resolve_staged_messages
 
 
@@ -331,16 +331,23 @@ def _load_shard_counts(shard_paths: Sequence[Path], manifest: dict[str, Any]) ->
 
 
 class PretokenizedUitarsDataset(IterableDataset):
-    def __init__(self, pretokenized_dir: Path, *, split: str = "all") -> None:
+    def __init__(
+        self,
+        pretokenized_dir: Path,
+        *,
+        split: str = "all",
+        smoke_microactions: int | None = None,
+    ) -> None:
         self.pretokenized_dir = Path(pretokenized_dir)
         self.split = normalize_pretokenized_split(split)
         self.manifest = _load_pretokenized_manifest(self.pretokenized_dir)
-        split_payload = load_split(self.pretokenized_dir)
+        split_payload = load_split(self.pretokenized_dir, smoke_microactions=smoke_microactions)
         split = normalize_pretokenized_split(split)
         if split != "all":
             if split_payload is None:
                 raise ValueError(
-                    f"Pretokenized split {split!r} requested but {self.pretokenized_dir / 'split.json'} is missing."
+                    f"Pretokenized split {split!r} requested but "
+                    f"{split_path(self.pretokenized_dir, smoke_microactions=smoke_microactions)} is missing."
                 )
             self.allowed_task_ids = split_payload.task_ids_for(split)
             self.split_row_count = split_payload.row_count_for(

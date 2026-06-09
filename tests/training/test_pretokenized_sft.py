@@ -60,7 +60,7 @@ def test_pretokenized_dataset_record_sharding_matches_rank_length(tmp_path, monk
         torch.save([record], pretokenized_dir / f"shard-{shard_idx:05d}.pt")
     (pretokenized_dir / "split.json").write_text(
         """{
-  "strategy": "one_task_per_microaction",
+  "strategy": "one_holdout_task_per_microaction",
   "holdout_rule": "min_task_index",
   "task_examples_dir": "unused",
   "task_generation_root": null,

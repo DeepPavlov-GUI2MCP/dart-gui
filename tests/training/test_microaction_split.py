@@ -66,7 +66,7 @@ def test_compute_smoke_microaction_split_uses_four_tasks_per_microaction():
         )
     finally:
         microaction_split.load_task_microaction_meta = original
-    assert split.strategy == microaction_split.SMOKE_SPLIT_STRATEGY
+    assert split.strategy == microaction_split.SPLIT_STRATEGY
     assert len(split.val_task_ids) == 4
     assert len(split.train_task_ids) == 12
     assert len(set(split.train_task_ids).intersection(split.val_task_ids)) == 0
@@ -118,6 +118,15 @@ def test_validate_split_for_training_rows_rejects_mismatched_holdout():
             task_examples_dir=str(TASK_EXAMPLES),
             task_generation_root="../gui_distillation/data/synthetic/libreoffice_writer/active_root_231/task_generation/gpt-5.4",
         )
+
+
+def test_split_path_uses_separate_files_for_smoke_and_full():
+    microaction_split = import_training_module("microaction_split")
+    pretokenized_dir = Path("/tmp/pretokenized")
+    assert microaction_split.split_filename() == "split.json"
+    assert microaction_split.split_filename(smoke_microactions=4) == "split-smoke.json"
+    assert microaction_split.split_path(pretokenized_dir).name == "split.json"
+    assert microaction_split.split_path(pretokenized_dir, smoke_microactions=4).name == "split-smoke.json"
 
 
 def test_rows_per_task_from_catalog_counts_steps_times_variants():
