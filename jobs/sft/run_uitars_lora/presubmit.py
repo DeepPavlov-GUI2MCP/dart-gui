@@ -18,6 +18,7 @@ if str(_TRAINING_DIR) not in sys.path:
     sys.path.insert(0, str(_TRAINING_DIR))
 
 from goal_variants import assert_tasks_have_goal_variants, task_examples_path, task_generation_path
+from mlflow_utils import ensure_presubmit_mlflow_server, resolve_mlflow_tmux_session
 from jobs.hf_cache import apply_hf_hub_env, warn_missing_hf_token
 from uitars_trace_dataset import TraceScanSettings
 from pretokenized_manifest import (
@@ -210,6 +211,15 @@ def validate_pretokenized_dataset(config_path: str) -> run_sft.ResolvedConfig:
     return config
 
 
+def preflight_mlflow(config: run_sft.ResolvedConfig) -> None:
+    if not config.mlflow.enabled:
+        return
+    output_dir = repo_path(str(config.output_dir))
+    tracking_uri = ensure_presubmit_mlflow_server(config.mlflow, output_dir=output_dir)
+    print(f"MLflow tracking URI: {tracking_uri}")
+    print(f"MLflow tmux session: {resolve_mlflow_tmux_session()}")
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     apply_hf_hub_env()
@@ -218,7 +228,10 @@ def main() -> int:
     if not config_path:
         fail("DART_SFT_CONFIG must be set")
     started = time.perf_counter()
-    validate_pretokenized_dataset(config_path)
+    with stage("validate pretokenized dataset"):
+        config = validate_pretokenized_dataset(config_path)
+    with stage("preflight mlflow"):
+        preflight_mlflow(config)
     LOGGER.info("[presubmit] total wall time %.3fs", time.perf_counter() - started)
     return 0
 

@@ -747,7 +747,8 @@ def build_sft_config(config: ResolvedConfig, *, pretokenized: bool = False) -> A
         token=configure_hf_hub(config_token=config.hf.api_key),
     ):
         packing = False
-    configure_mlflow(config.mlflow)
+    if config.mlflow.enabled and is_main_process():
+        configure_mlflow(config.mlflow, output_dir=config.output_dir)
     if config.training.save_lora_every_n_epochs > 0:
         save_strategy = "no"
     else:
@@ -1008,7 +1009,9 @@ def train(
         trainer_kwargs["data_collator"] = data_collator
 
     callbacks: list[Any] = []
-    if config.mlflow.enabled and configure_mlflow(config.mlflow):
+    if config.mlflow.enabled and is_main_process() and configure_mlflow(
+        config.mlflow, output_dir=config.output_dir
+    ):
         callbacks.append(build_mlflow_callback())
     if config.training.save_lora_every_n_epochs > 0:
         callbacks.append(
