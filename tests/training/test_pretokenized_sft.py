@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import torch
+from torch.utils.data import DataLoader
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_SFT = REPO_ROOT / "training" / "run_sft.py"
@@ -37,6 +38,47 @@ def test_pretokenized_collator_pads_batch():
     assert batch["input_ids"].shape == (2, 7)
     assert batch["labels"].shape == (2, 7)
     assert batch["attention_mask"].shape == (2, 7)
+
+
+def test_pretokenized_dataset_record_sharding_matches_rank_length(tmp_path, monkeypatch):
+    uitars_collator = import_training_module("uitars_collator")
+    pretokenized_dir = tmp_path / "pretokenized"
+    pretokenized_dir.mkdir()
+    (pretokenized_dir / "manifest.json").write_text('{"expanded_rows": 10}\n', encoding="utf-8")
+    records = [
+        {
+            "task_id": "train-task",
+            "features": {
+                "input_ids": torch.tensor([idx]),
+                "labels": torch.tensor([idx]),
+                "attention_mask": torch.tensor([1]),
+            },
+        }
+        for idx in range(10)
+    ]
+    for shard_idx, record in enumerate(records):
+        torch.save([record], pretokenized_dir / f"shard-{shard_idx:05d}.pt")
+    (pretokenized_dir / "split.json").write_text(
+        """{
+  "strategy": "one_task_per_microaction",
+  "holdout_rule": "min_task_index",
+  "task_examples_dir": "unused",
+  "task_generation_root": null,
+  "train_task_ids": ["train-task"],
+  "val_task_ids": [],
+  "microaction_holdouts": {},
+  "train_rows": 8,
+  "val_rows": 2
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    dataset = uitars_collator.PretokenizedUitarsDataset(pretokenized_dir, split="train")
+    assert len(dataset) == 4
+    rows = list(DataLoader(dataset, batch_size=None, num_workers=2))
+    assert len(rows) == len(dataset)
 
 
 def test_dry_run_from_pretokenized_traces_subprocess():

@@ -16,6 +16,8 @@ import yaml
 from build_uitars_sft_dataset import cache_name as uitars_cache_name
 from build_uitars_sft_dataset import stage_trace_dataset
 from hf_hub import configure_hf_hub, load_pretrained
+from mlflow_utils import MlflowSettings, build_mlflow_callback, configure_mlflow
+from sft_callbacks import LoraEpochCheckpointCallback
 from uitars_collator import (
     PretokenizedUitarsDataset,
     UitarsTraceDataset,
@@ -75,6 +77,8 @@ class DatasetSettings:
     max_goal_variants: int = 1
     task_generation_root: str | None = None
     pretokenized_traces_dir: str | None = None
+    pretokenized_split: str = "train"
+    smoke_microactions: int | None = None
     uitars: UitarsFormatSettings = field(default_factory=UitarsFormatSettings)
 
 
@@ -119,6 +123,8 @@ class TrainingSettings:
     dataloader_num_workers: int | None = None
     dataloader_prefetch_factor: int | None = None
     dataloader_persistent_workers: bool = False
+    save_lora_every_n_epochs: float = 1.0
+    eval_every_n_epochs: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -146,6 +152,7 @@ class ResolvedConfig:
     training: TrainingSettings
     hf: HuggingFaceSettings
     hub: HubSettings
+    mlflow: MlflowSettings = field(default_factory=MlflowSettings)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -275,10 +282,22 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
             raise ValueError("`dataset.max_preflight_steps` must be an integer.")
         max_preflight_steps = max_preflight_steps_raw
 
+    smoke_microactions_raw = dataset_cfg.get("smoke_microactions")
+    smoke_microactions: int | None = None
+    if smoke_microactions_raw is not None:
+        if isinstance(smoke_microactions_raw, bool) or not isinstance(smoke_microactions_raw, int):
+            raise ValueError("`dataset.smoke_microactions` must be an integer.")
+        smoke_microactions = smoke_microactions_raw
+
     goal_variants = get_optional_bool(dataset_cfg, "goal_variants", False)
     max_goal_variants = get_optional_int(dataset_cfg, "max_goal_variants", 1)
     task_generation_root = get_optional_str(dataset_cfg, "task_generation_root")
     pretokenized_traces_dir = get_optional_str(dataset_cfg, "pretokenized_traces_dir")
+    pretokenized_split = get_optional_str(dataset_cfg, "pretokenized_split", "train") or "train"
+    if pretokenized_split == "dev":
+        pretokenized_split = "val"
+    if pretokenized_split not in {"train", "val", "all"}:
+        raise ValueError("`dataset.pretokenized_split` must be one of: train, val, all.")
     if goal_variants and not task_generation_root:
         raise ValueError("`dataset.task_generation_root` is required when `dataset.goal_variants` is true.")
 
@@ -325,6 +344,8 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         max_goal_variants=max_goal_variants,
         task_generation_root=task_generation_root,
         pretokenized_traces_dir=pretokenized_traces_dir,
+        pretokenized_split=pretokenized_split,
+        smoke_microactions=smoke_microactions,
         uitars=uitars,
     )
 
@@ -346,6 +367,23 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
     max_steps = training_cfg.get("max_steps")
     if max_steps is not None and not isinstance(max_steps, int):
         raise ValueError("`training.max_steps` must be an integer.")
+
+    save_lora_raw = training_cfg.get("save_lora_every_n_epochs", 1.0)
+    if isinstance(save_lora_raw, bool) or not isinstance(save_lora_raw, (int, float)):
+        raise ValueError("`training.save_lora_every_n_epochs` must be a number.")
+    save_lora_every_n_epochs = float(save_lora_raw)
+
+    eval_every_raw = training_cfg.get("eval_every_n_epochs", 0.5)
+    if isinstance(eval_every_raw, bool) or not isinstance(eval_every_raw, (int, float)):
+        raise ValueError("`training.eval_every_n_epochs` must be a number.")
+    eval_every_n_epochs = float(eval_every_raw)
+
+    mlflow_cfg = get_mapping(root, "mlflow")
+    mlflow = MlflowSettings(
+        enabled=get_optional_bool(mlflow_cfg, "enabled", False),
+        experiment_name=get_optional_str(mlflow_cfg, "experiment_name", "dart-uitars-sft") or "dart-uitars-sft",
+        run_name=get_optional_str(mlflow_cfg, "run_name"),
+    )
 
     training = TrainingSettings(
         per_device_train_batch_size=get_optional_int(
@@ -369,6 +407,8 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         dataloader_num_workers=get_optional_nullable_int(training_cfg, "dataloader_num_workers"),
         dataloader_prefetch_factor=get_optional_nullable_int(training_cfg, "dataloader_prefetch_factor"),
         dataloader_persistent_workers=get_optional_bool(training_cfg, "dataloader_persistent_workers", False),
+        save_lora_every_n_epochs=save_lora_every_n_epochs,
+        eval_every_n_epochs=eval_every_n_epochs,
     )
 
     resolved_hub = HubSettings(
@@ -389,6 +429,7 @@ def resolve_config(root: Mapping[str, Any], *, config_path: str | None, config_m
         training=training,
         hf=HuggingFaceSettings(api_key=resolve_secret(get_optional_str(hf_cfg, "api_key"))),
         hub=resolved_hub,
+        mlflow=mlflow,
     )
 
 
@@ -539,48 +580,37 @@ def validate_hub_write(config: ResolvedConfig, *, skip: bool) -> None:
     )
 
 
+def trace_scan_settings_from_config(config: ResolvedConfig) -> TraceScanSettings:
+    return TraceScanSettings(
+        trace_roots=config.dataset.trace_roots,
+        task_examples_dir=config.dataset.task_examples_dir or "",
+        sample_mode=config.dataset.sample_mode,
+        history_n=config.dataset.history_n,
+        min_result=config.dataset.min_result,
+        trace_source=config.dataset.trace_source,  # type: ignore[arg-type]
+        uitars=config.dataset.uitars,
+        preflight_augmented_path=config.dataset.preflight_augmented_path,
+        trace_root=config.dataset.trace_root,
+        max_rollouts=config.dataset.max_rollouts,
+        max_preflight_steps=config.dataset.max_preflight_steps,
+        goal_variants=config.dataset.goal_variants,
+        max_goal_variants=config.dataset.max_goal_variants,
+        task_generation_root=config.dataset.task_generation_root,
+        pretokenized_traces_dir=config.dataset.pretokenized_traces_dir,
+        smoke_microactions=config.dataset.smoke_microactions,
+    )
+
+
 def resolve_staged_data_path(config: ResolvedConfig) -> Path:
     if config.dataset.format == "uitars_trace":
-        scan_settings = TraceScanSettings(
-            trace_roots=config.dataset.trace_roots,
-            task_examples_dir=config.dataset.task_examples_dir or "",
-            sample_mode=config.dataset.sample_mode,
-            history_n=config.dataset.history_n,
-            min_result=config.dataset.min_result,
-            trace_source=config.dataset.trace_source,  # type: ignore[arg-type]
-            uitars=config.dataset.uitars,
-            preflight_augmented_path=config.dataset.preflight_augmented_path,
-            trace_root=config.dataset.trace_root,
-            max_rollouts=config.dataset.max_rollouts,
-            max_preflight_steps=config.dataset.max_preflight_steps,
-            goal_variants=config.dataset.goal_variants,
-            max_goal_variants=config.dataset.max_goal_variants,
-            task_generation_root=config.dataset.task_generation_root,
-            pretokenized_traces_dir=config.dataset.pretokenized_traces_dir,
-        )
+        scan_settings = trace_scan_settings_from_config(config)
         return config.datasets_dir / uitars_cache_name(scan_settings) / "data.jsonl"
     return config.datasets_dir / dataset_cache_name(config.dataset) / "data.jsonl"
 
 
 def stage_dataset(config: ResolvedConfig, *, dry_run: bool = False) -> Path:
     if config.dataset.format == "uitars_trace":
-        scan_settings = TraceScanSettings(
-            trace_roots=config.dataset.trace_roots,
-            task_examples_dir=config.dataset.task_examples_dir or "",
-            sample_mode=config.dataset.sample_mode,
-            history_n=config.dataset.history_n,
-            min_result=config.dataset.min_result,
-            trace_source=config.dataset.trace_source,  # type: ignore[arg-type]
-            uitars=config.dataset.uitars,
-            preflight_augmented_path=config.dataset.preflight_augmented_path,
-            trace_root=config.dataset.trace_root,
-            max_rollouts=config.dataset.max_rollouts,
-            max_preflight_steps=config.dataset.max_preflight_steps,
-            goal_variants=config.dataset.goal_variants,
-            max_goal_variants=config.dataset.max_goal_variants,
-            task_generation_root=config.dataset.task_generation_root,
-            pretokenized_traces_dir=config.dataset.pretokenized_traces_dir,
-        )
+        scan_settings = trace_scan_settings_from_config(config)
         data_path = resolve_staged_data_path(config)
         if dry_run:
             rows = build_trace_dataset_rows(scan_settings)
@@ -677,6 +707,31 @@ def is_vision_model(model_name: str, trust_remote_code: bool, *, token: str | No
     return any(token in arch_text for token in ("vision", "vl", "image", "multimodal"))
 
 
+def apply_eval_schedule(
+    sft_config: Any,
+    config: ResolvedConfig,
+    *,
+    train_dataset_len: int,
+) -> None:
+    if config.training.eval_every_n_epochs <= 0:
+        sft_config.eval_strategy = "no"
+        return
+    world_size = max(1, int(os.environ.get("WORLD_SIZE", "1")))
+    effective_batch = (
+        config.training.per_device_train_batch_size
+        * config.training.gradient_accumulation_steps
+        * world_size
+    )
+    if config.training.max_steps is not None:
+        steps_per_epoch = config.training.max_steps / max(float(config.training.num_train_epochs), 1.0)
+    else:
+        steps_per_epoch = train_dataset_len / max(effective_batch, 1)
+    eval_steps = max(1, int(round(steps_per_epoch * config.training.eval_every_n_epochs)))
+    sft_config.eval_strategy = "steps"
+    sft_config.eval_steps = eval_steps
+    sft_config.per_device_eval_batch_size = config.training.per_device_train_batch_size
+
+
 def build_sft_config(config: ResolvedConfig, *, pretokenized: bool = False) -> Any:
     import torch
     from trl import SFTConfig
@@ -692,6 +747,11 @@ def build_sft_config(config: ResolvedConfig, *, pretokenized: bool = False) -> A
         token=configure_hf_hub(config_token=config.hf.api_key),
     ):
         packing = False
+    configure_mlflow(config.mlflow)
+    if config.training.save_lora_every_n_epochs > 0:
+        save_strategy = "no"
+    else:
+        save_strategy = "steps"
     kwargs: dict[str, Any] = {
         "output_dir": str(config.output_dir),
         "per_device_train_batch_size": config.training.per_device_train_batch_size,
@@ -699,7 +759,6 @@ def build_sft_config(config: ResolvedConfig, *, pretokenized: bool = False) -> A
         "learning_rate": config.training.learning_rate,
         "warmup_steps": config.training.warmup_steps,
         "logging_steps": config.training.logging_steps,
-        "save_steps": config.training.save_steps,
         "weight_decay": config.training.weight_decay,
         "max_length": config.model.max_seq_length,
         "packing": packing,
@@ -707,8 +766,12 @@ def build_sft_config(config: ResolvedConfig, *, pretokenized: bool = False) -> A
         "bf16": use_bf16,
         "gradient_checkpointing": config.training.gradient_checkpointing,
         "report_to": "none",
+        "save_strategy": save_strategy,
+        "eval_strategy": "no",
         "remove_unused_columns": False,
     }
+    if save_strategy == "steps":
+        kwargs["save_steps"] = config.training.save_steps
     if config.training.max_steps is not None:
         kwargs["max_steps"] = config.training.max_steps
     else:
@@ -832,6 +895,9 @@ def print_dry_run_summary(
     dtype_label = "bfloat16" if config.training.bf16 else "float16"
     print(f"Model dtype: {dtype_label}")
     print(f"LoRA r/alpha: {config.lora.r}/{config.lora.alpha}")
+    print(f"MLflow enabled: {config.mlflow.enabled}")
+    print(f"LoRA checkpoint every n epochs: {config.training.save_lora_every_n_epochs}")
+    print(f"Eval every n epochs: {config.training.eval_every_n_epochs}")
     print(f"Training: {sft_config}")
 
 
@@ -848,6 +914,30 @@ def prepare_staged_dataset(
         if not is_main_process():
             wait_for_path(data_path)
     return data_path
+
+
+def ensure_pretokenized_split(config: ResolvedConfig, pretokenized_dir: Path) -> None:
+    from microaction_split import compute_split_for_training_rows, load_split, write_split
+    from pretokenized_manifest import load_jsonl_rows
+
+    if not config.dataset.task_examples_dir:
+        raise ValueError(
+            "dataset.task_examples_dir is required to compute pretokenized train/val split metadata."
+        )
+    staged_jsonl = resolve_staged_data_path(config)
+    rows = load_jsonl_rows(staged_jsonl)
+    split = compute_split_for_training_rows(
+        rows,
+        task_examples_dir=config.dataset.task_examples_dir,
+        task_generation_root=config.dataset.task_generation_root,
+        goal_variants=config.dataset.goal_variants,
+        max_goal_variants=config.dataset.max_goal_variants,
+        smoke_microactions=config.dataset.smoke_microactions,
+    )
+    existing = load_split(pretokenized_dir)
+    if existing is not None and existing.to_dict() == split.to_dict():
+        return
+    write_split(pretokenized_dir, split)
 
 
 def train(
@@ -868,7 +958,14 @@ def train(
     model, processor, tokenizer, peft_config = load_model_and_processor(config)
 
     if pretokenized_dir is not None:
-        train_dataset = PretokenizedUitarsDataset(pretokenized_dir)
+        if is_main_process():
+            ensure_pretokenized_split(config, pretokenized_dir)
+        if is_distributed():
+            distributed_barrier()
+        train_dataset = PretokenizedUitarsDataset(
+            pretokenized_dir,
+            split=config.dataset.pretokenized_split,
+        )
         pad_token_id = processor.tokenizer.pad_token_id
         if pad_token_id is None:
             pad_token_id = processor.tokenizer.eos_token_id
@@ -885,6 +982,19 @@ def train(
         data_collator = None
         processing_class = tokenizer
 
+    eval_dataset = None
+    if (
+        pretokenized_dir is not None
+        and config.training.eval_every_n_epochs > 0
+        and config.dataset.pretokenized_split == "train"
+    ):
+        eval_dataset = PretokenizedUitarsDataset(pretokenized_dir, split="val")
+        if len(eval_dataset) == 0:
+            eval_dataset = None
+
+    if eval_dataset is not None:
+        apply_eval_schedule(sft_config, config, train_dataset_len=len(train_dataset))
+
     trainer_kwargs: dict[str, Any] = {
         "model": model,
         "args": sft_config,
@@ -892,8 +1002,23 @@ def train(
         "processing_class": processing_class,
         "peft_config": peft_config,
     }
+    if eval_dataset is not None:
+        trainer_kwargs["eval_dataset"] = eval_dataset
     if data_collator is not None:
         trainer_kwargs["data_collator"] = data_collator
+
+    callbacks: list[Any] = []
+    if config.mlflow.enabled and configure_mlflow(config.mlflow):
+        callbacks.append(build_mlflow_callback())
+    if config.training.save_lora_every_n_epochs > 0:
+        callbacks.append(
+            LoraEpochCheckpointCallback(
+                every_n_epochs=config.training.save_lora_every_n_epochs,
+                output_dir=config.output_dir,
+            )
+        )
+    if callbacks:
+        trainer_kwargs["callbacks"] = callbacks
 
     trainer = SFTTrainer(**trainer_kwargs)
     trainer.train()
@@ -928,6 +1053,7 @@ def dataset_cache_name(dataset: DatasetSettings) -> str:
             max_goal_variants=dataset.max_goal_variants,
             task_generation_root=dataset.task_generation_root,
             pretokenized_traces_dir=dataset.pretokenized_traces_dir,
+            smoke_microactions=dataset.smoke_microactions,
         )
         return uitars_cache_name(scan_settings)
     if not dataset.repo_id:

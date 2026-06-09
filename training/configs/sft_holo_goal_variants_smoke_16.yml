@@ -12,11 +12,12 @@ train_sft:
     task_examples_dir: GUI-Docker-Env/evaluation_examples/examples
     sample_mode: per_step
     history_n: 5
-    max_rollouts: 16
+    smoke_microactions: 4
     refresh: true
     goal_variants: true
     max_goal_variants: 1
     pretokenized_traces_dir: datasets/runtime/pretokenized-smoke-16
+    pretokenized_split: train
     task_generation_root: ../gui_distillation/data/synthetic/libreoffice_writer/active_root_231/task_generation/gpt-5.4
     uitars:
       prompt_style: qwen25vl_normal
@@ -41,13 +42,18 @@ train_sft:
     num_train_epochs: 1
     learning_rate: 0.0002
     warmup_steps: 1
-    logging_steps: 10
-    save_steps: 100
+    logging_steps: 1
+    save_lora_every_n_epochs: 0.5
+    eval_every_n_epochs: 0.5
     packing: false
     gradient_checkpointing: true
     bf16: true
     fp16: false
     ddp_find_unused_parameters: false
+
+  mlflow:
+    enabled: true
+    experiment_name: dart-uitars-sft-smoke
 
   lora:
     r: 16

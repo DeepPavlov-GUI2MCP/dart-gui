@@ -136,6 +136,10 @@ def build_sft_env() -> dict[str, str]:
         env_variables["DART_SFT_RUN_ROOT"] = run_root
     env_variables.update(hf_hub_env())
     env_variables.update(forward_hf_token_env())
+    for key in ("MLFLOW_HOST", "MLFLOW_PORT", "MLFLOW_TRACKING_URI", "MLFLOW_EXPERIMENT_NAME"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            env_variables[key] = value
     return env_variables
 
 

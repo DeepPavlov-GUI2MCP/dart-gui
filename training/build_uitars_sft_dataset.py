@@ -120,6 +120,12 @@ def load_trace_scan_settings(config_path: str) -> tuple[TraceScanSettings, Path,
     max_goal_variants = get_optional_int(dataset_cfg, "max_goal_variants", 1)
     task_generation_root = get_optional_str(dataset_cfg, "task_generation_root")
     pretokenized_traces_dir = get_optional_str(dataset_cfg, "pretokenized_traces_dir")
+    smoke_microactions_raw = dataset_cfg.get("smoke_microactions")
+    smoke_microactions: int | None = None
+    if smoke_microactions_raw is not None:
+        if isinstance(smoke_microactions_raw, bool) or not isinstance(smoke_microactions_raw, int):
+            raise ValueError("`dataset.smoke_microactions` must be an integer.")
+        smoke_microactions = smoke_microactions_raw
     if goal_variants:
         if max_goal_variants < 1:
             raise ValueError("`dataset.max_goal_variants` must be at least 1 when goal_variants is enabled.")
@@ -142,6 +148,7 @@ def load_trace_scan_settings(config_path: str) -> tuple[TraceScanSettings, Path,
         max_goal_variants=max_goal_variants,
         task_generation_root=task_generation_root,
         pretokenized_traces_dir=pretokenized_traces_dir,
+        smoke_microactions=smoke_microactions,
     )
     datasets_dir = repo_path(get_optional_str(output_cfg, "datasets_dir", "datasets/runtime") or "datasets/runtime")
     refresh = get_optional_bool(dataset_cfg, "refresh", False)
@@ -164,6 +171,7 @@ def cache_name(settings: TraceScanSettings) -> str:
             "goal_variants": settings.goal_variants,
             "max_goal_variants": settings.max_goal_variants,
             "task_generation_root": settings.task_generation_root,
+            "smoke_microactions": settings.smoke_microactions,
             "uitars": {
                 "prompt_style": settings.uitars.prompt_style,
                 "infer_mode": settings.uitars.infer_mode,

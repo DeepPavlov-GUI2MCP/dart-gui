@@ -16,6 +16,7 @@ train_sft:
     goal_variants: true
     max_goal_variants: 1
     pretokenized_traces_dir: datasets/runtime/uitars-traces-b8a44e9156a4/pretokenized-uitars-traces-b8a44e9156a4
+    pretokenized_split: train
     task_generation_root: ../gui_distillation/data/synthetic/libreoffice_writer/active_root_231/task_generation/gpt-5.4
     uitars:
       prompt_style: qwen25vl_normal
@@ -37,18 +38,23 @@ train_sft:
   training:
     per_device_train_batch_size: 1
     gradient_accumulation_steps: 1
-    num_train_epochs: 1
+    num_train_epochs: 4
     learning_rate: 0.0002
     warmup_steps: 10
     logging_steps: 50
-    save_steps: 500
+    save_lora_every_n_epochs: 1
+    eval_every_n_epochs: 0.5
     packing: false
     gradient_checkpointing: true
     bf16: true
     fp16: false
-    dataloader_num_workers: 6
+    dataloader_num_workers: 8
     dataloader_prefetch_factor: 2
     dataloader_persistent_workers: true
+
+  mlflow:
+    enabled: true
+    experiment_name: dart-uitars-sft
 
   lora:
     r: 16

@@ -105,6 +105,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Allow Hugging Face network checks while loading the processor.",
     )
     parser.add_argument("--log-level", default="INFO", help="Python logging level.")
+    parser.add_argument(
+        "--write-split-only",
+        action="store_true",
+        help="Write split.json from staged rows without pretokenizing shards.",
+    )
     return parser.parse_args(list(sys.argv[1:] if argv is None else argv))
 
 
@@ -385,6 +390,25 @@ def write_manifest(
     )
 
 
+def write_pretokenized_split(
+    output_dir: Path,
+    rows: Sequence[dict[str, Any]],
+    settings: TraceScanSettings,
+):
+    from microaction_split import compute_split_for_training_rows, write_split
+
+    split = compute_split_for_training_rows(
+        rows,
+        task_examples_dir=settings.task_examples_dir,
+        task_generation_root=settings.task_generation_root,
+        goal_variants=settings.goal_variants,
+        max_goal_variants=settings.max_goal_variants,
+        smoke_microactions=settings.smoke_microactions,
+    )
+    write_split(output_dir, split)
+    return split
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     configure_logging(args.log_level)
@@ -405,6 +429,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     load_start = time.perf_counter()
     indexed_rows = load_rows(data_path, max_rows=args.max_rows, sort_by_cost=args.sort_by_cost)
     LOGGER.info("[preparation] loaded rows=%d in %.3fs", len(indexed_rows), time.perf_counter() - load_start)
+
+    if args.write_split_only:
+        output_dir = args.output_dir
+        if output_dir is None:
+            output_dir = str(data_path.parent / pretokenized_cache_dir_name(settings))
+        rows_only = [row for _, row in indexed_rows]
+        split = write_pretokenized_split(Path(output_dir), rows_only, settings)
+        LOGGER.info(
+            "[summary] wrote split to %s train_tasks=%d val_tasks=%d train_rows=%d val_rows=%d wall_s=%.3fs",
+            Path(output_dir) / "split.json",
+            len(split.train_task_ids),
+            len(split.val_task_ids),
+            split.train_rows,
+            split.val_rows,
+            time.perf_counter() - total_start,
+        )
+        return 0
 
     goal_catalog_payload: dict[str, list[dict[str, Any]]] | None = None
     if settings.goal_variants:
@@ -505,7 +546,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             for _, row in indexed_rows
             if isinstance(row.get("task_id"), str)
         }
-        shard_paths = sorted(Path(output_dir).glob("shard-*.pt"))
+        written_paths = sorted(
+            Path(summary.output_path)
+            for summary in summaries
+            if summary.output_path
+        )
+        for stale in Path(output_dir).glob("shard-*.pt"):
+            if stale.resolve() not in {path.resolve() for path in written_paths}:
+                stale.unlink()
+        shard_paths = written_paths
         write_manifest(
             Path(output_dir),
             settings=settings,
@@ -517,6 +566,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             shard_count=len(shard_paths),
             variants_per_task=settings.max_goal_variants,
         )
+        rows_only = [row for _, row in indexed_rows]
+        write_pretokenized_split(Path(output_dir), rows_only, settings)
 
     LOGGER.info(
         "[summary] base_rows=%d expanded_rows=%d workers=%d wall_s=%.3f preparation_plus_data_s=%.3f "

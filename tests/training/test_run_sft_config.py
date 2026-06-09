@@ -328,3 +328,39 @@ def test_dry_run_subprocess_holo_fixture():
     )
     assert result.returncode == 0, result.stderr
     assert "Staged dataset:" in result.stdout
+
+
+def test_apply_eval_schedule_sets_fractional_eval_steps():
+    run_sft = import_training_module("run_sft")
+    config = run_sft.load_config_file(str(SFT_GOAL_VARIANTS_CONFIG))
+    config = run_sft.replace(
+        config,
+        training=run_sft.replace(
+            config.training,
+            max_steps=None,
+            num_train_epochs=1,
+            eval_every_n_epochs=0.5,
+            gradient_accumulation_steps=2,
+            per_device_train_batch_size=1,
+        ),
+    )
+    sft_config = run_sft.build_sft_config(config, pretokenized=True)
+    run_sft.apply_eval_schedule(sft_config, config, train_dataset_len=100)
+    assert sft_config.eval_strategy == "steps"
+    assert sft_config.eval_steps == 25
+
+
+def test_apply_eval_schedule_disabled_when_zero():
+    run_sft = import_training_module("run_sft")
+    config = run_sft.load_config_file(str(SFT_GOAL_VARIANTS_CONFIG))
+    config = run_sft.replace(config, training=run_sft.replace(config.training, eval_every_n_epochs=0.0))
+    sft_config = run_sft.build_sft_config(config, pretokenized=True)
+    run_sft.apply_eval_schedule(sft_config, config, train_dataset_len=100)
+    assert sft_config.eval_strategy == "no"
+
+
+def test_smoke_config_has_eval_every_n_epochs():
+    run_sft = import_training_module("run_sft")
+    config = run_sft.load_config_file(str(REPO_ROOT / "training/configs/sft_holo_goal_variants_smoke_16.yml"))
+    assert config.training.eval_every_n_epochs == 0.5
+    assert config.dataset.pretokenized_split == "train"

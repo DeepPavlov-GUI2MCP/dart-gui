@@ -120,9 +120,9 @@ def validate_pretokenized_dataset(config_path: str) -> run_sft.ResolvedConfig:
                 rows,
                 max_variants=config.dataset.max_goal_variants,
             )
-            expected_training_rows = expected_training_rows_for_goal_variants(rows, catalog)
+            expected_full_rows = expected_training_rows_for_goal_variants(rows, catalog)
         else:
-            expected_training_rows = expected_base_rows
+            expected_full_rows = expected_base_rows
 
     with stage("load manifest"):
         manifest = load_manifest(pretokenized_dir)
@@ -138,11 +138,46 @@ def validate_pretokenized_dataset(config_path: str) -> run_sft.ResolvedConfig:
         except ValueError as exc:
             fail(str(exc))
 
+    with stage("validate split metadata"):
+        from microaction_split import load_split, validate_split_for_training_rows
+
+        split = load_split(pretokenized_dir)
+        if split is None:
+            fail(f"missing pretokenized split metadata: {pretokenized_dir / 'split.json'}")
+        split_rows = rows if rows else load_jsonl_rows(staged_jsonl)
+        try:
+            validate_split_for_training_rows(
+                split,
+                split_rows,
+                task_examples_dir=config.dataset.task_examples_dir or "",
+                task_generation_root=config.dataset.task_generation_root,
+                goal_variants=config.dataset.goal_variants,
+                max_goal_variants=config.dataset.max_goal_variants,
+                smoke_microactions=config.dataset.smoke_microactions,
+            )
+        except ValueError as exc:
+            fail(str(exc))
+        if split.train_rows + split.val_rows != expected_full_rows:
+            fail(
+                "pretokenized split row count mismatch: "
+                f"train={split.train_rows} val={split.val_rows} "
+                f"expected total={expected_full_rows}"
+            )
+        pretokenized_split = config.dataset.pretokenized_split
+        if pretokenized_split == "dev":
+            pretokenized_split = "val"
+        if pretokenized_split == "train":
+            split_rows = split.train_rows
+        elif pretokenized_split == "val":
+            split_rows = split.val_rows
+        else:
+            split_rows = expected_full_rows
+
     with stage("compare row counts"):
-        if stats.actual_rows != expected_training_rows:
+        if stats.actual_rows != expected_full_rows:
             fail(
                 "pretokenized row count mismatch: "
-                f"found {stats.actual_rows}, expected {expected_training_rows}"
+                f"found {stats.actual_rows}, expected {expected_full_rows}"
             )
 
     with stage("validate manifest metadata"):
@@ -153,7 +188,7 @@ def validate_pretokenized_dataset(config_path: str) -> run_sft.ResolvedConfig:
                 max_goal_variants=config.dataset.max_goal_variants,
                 task_generation_root=config.dataset.task_generation_root,
                 base_rows=expected_base_rows,
-                expanded_rows=expected_training_rows,
+                expanded_rows=expected_full_rows,
                 rollouts=stats.rollouts,
                 tasks=stats.tasks,
                 shard_count=stats.shard_count,
@@ -169,7 +204,8 @@ def validate_pretokenized_dataset(config_path: str) -> run_sft.ResolvedConfig:
     print(f"Rollouts: {stats.rollouts}")
     print(f"Tasks: {stats.tasks}")
     print(f"Goals: {goals_label}")
-    print(f"Training rows: {stats.actual_rows} (expected {expected_training_rows})")
+    print(f"Training rows: {stats.actual_rows} (expected {expected_full_rows})")
+    print(f"Split train/val rows: {split.train_rows}/{split.val_rows} (config split={config.dataset.pretokenized_split}, rows={split_rows})")
     print(f"Shards: {stats.shard_count}  Manifest: {manifest_label}")
     return config
 

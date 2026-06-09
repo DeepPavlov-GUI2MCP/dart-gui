@@ -52,6 +52,7 @@ class TraceScanSettings:
     max_goal_variants: int = 1
     task_generation_root: str | None = None
     pretokenized_traces_dir: str | None = None
+    smoke_microactions: int | None = None
 
 
 def repo_path(value: str) -> Path:
@@ -627,12 +628,20 @@ def build_rows_for_rollout(rollout_dir: Path, settings: TraceScanSettings) -> li
 def build_trace_dataset_rows(settings: TraceScanSettings) -> list[dict[str, Any]]:
     if settings.preflight_augmented_path:
         return build_augmented_preflight_dataset_rows(settings)
+    smoke_task_ids: set[str] | None = None
+    if settings.smoke_microactions is not None:
+        from microaction_split import smoke_task_ids_from_rollouts
+
+        smoke_task_ids = smoke_task_ids_from_rollouts(settings, num_microactions=settings.smoke_microactions)
     rows: list[dict[str, Any]] = []
     rollout_count = 0
     for rollout_dir in iter_rollout_dirs(settings.trace_roots):
-        if settings.max_rollouts is not None and rollout_count >= settings.max_rollouts:
+        if settings.max_rollouts is not None and settings.smoke_microactions is None and rollout_count >= settings.max_rollouts:
             break
         try:
+            domain, task_id = infer_domain_and_task_id(rollout_dir)
+            if smoke_task_ids is not None and task_id not in smoke_task_ids:
+                continue
             built = build_rows_for_rollout(rollout_dir, settings)
         except (FileNotFoundError, ValueError):
             continue
@@ -640,4 +649,6 @@ def build_trace_dataset_rows(settings: TraceScanSettings) -> list[dict[str, Any]
             continue
         rows.extend(built)
         rollout_count += 1
+        if smoke_task_ids is not None and rollout_count >= len(smoke_task_ids):
+            break
     return rows
