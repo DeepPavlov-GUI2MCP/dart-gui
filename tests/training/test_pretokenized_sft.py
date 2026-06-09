@@ -40,6 +40,143 @@ def test_pretokenized_collator_pads_batch():
     assert batch["attention_mask"].shape == (2, 7)
 
 
+def _write_split_pretokenized_dir(
+    pretokenized_dir: Path,
+    *,
+    train_records: list[dict],
+    val_records: list[dict],
+) -> None:
+    pretokenized_dir.mkdir(parents=True, exist_ok=True)
+    all_records = train_records + val_records
+    (pretokenized_dir / "manifest.json").write_text(
+        f'{{"expanded_rows": {len(all_records)}}}\n',
+        encoding="utf-8",
+    )
+    for shard_idx, record in enumerate(all_records):
+        torch.save([record], pretokenized_dir / f"shard-{shard_idx:05d}.pt")
+    (pretokenized_dir / "split.json").write_text(
+        f"""{{
+  "strategy": "one_holdout_task_per_microaction",
+  "holdout_rule": "min_task_index",
+  "task_examples_dir": "unused",
+  "task_generation_root": null,
+  "train_task_ids": ["train-task"],
+  "val_task_ids": ["val-task"],
+  "microaction_holdouts": {{}},
+  "train_rows": {len(train_records)},
+  "val_rows": {len(val_records)}
+}}
+""",
+        encoding="utf-8",
+    )
+
+
+def _record(idx: int, task_id: str) -> dict:
+    return {
+        "task_id": task_id,
+        "features": {
+            "input_ids": torch.tensor([idx]),
+            "labels": torch.tensor([idx]),
+            "attention_mask": torch.tensor([1]),
+        },
+    }
+
+
+def _collect_rank_items(dataset, *, num_workers: int = 0) -> list[dict]:
+    rows = list(DataLoader(dataset, batch_size=None, num_workers=num_workers))
+    return sorted(rows, key=lambda item: int(item["features"]["input_ids"].item()))
+
+
+def test_pretokenized_shard_index_matches_modulo_semantics(tmp_path, monkeypatch):
+    uitars_collator = import_training_module("uitars_collator")
+    pretokenized_shard_index = import_training_module("pretokenized_shard_index")
+    pretokenized_dir = tmp_path / "pretokenized"
+    train_records = [_record(idx, "train-task") for idx in range(8)]
+    val_records = [_record(100 + idx, "val-task") for idx in range(4)]
+    _write_split_pretokenized_dir(
+        pretokenized_dir,
+        train_records=train_records,
+        val_records=val_records,
+    )
+    world_size = 4
+    pretokenized_shard_index.ensure_shard_index(
+        pretokenized_dir,
+        split_name="train",
+        allowed_task_ids={"train-task"},
+        world_size=world_size,
+    )
+    for rank in range(world_size):
+        monkeypatch.setenv("RANK", str(rank))
+        monkeypatch.setenv("WORLD_SIZE", str(world_size))
+        indexed = _collect_rank_items(
+            uitars_collator.PretokenizedUitarsDataset(pretokenized_dir, split="train")
+        )
+        monkeypatch.setattr(uitars_collator, "load_shard_index", lambda *_a, **_k: None)
+        legacy = _collect_rank_items(
+            uitars_collator.PretokenizedUitarsDataset(pretokenized_dir, split="train")
+        )
+        assert indexed == legacy
+
+
+def test_pretokenized_shard_index_opens_only_assigned_shards(tmp_path, monkeypatch):
+    uitars_collator = import_training_module("uitars_collator")
+    pretokenized_shard_index = import_training_module("pretokenized_shard_index")
+    pretokenized_dir = tmp_path / "pretokenized"
+    train_records = [_record(idx, "train-task") for idx in range(10)]
+    val_records = [_record(100 + idx, "val-task") for idx in range(2)]
+    _write_split_pretokenized_dir(
+        pretokenized_dir,
+        train_records=train_records,
+        val_records=val_records,
+    )
+    world_size = 2
+    pretokenized_shard_index.ensure_shard_index(
+        pretokenized_dir,
+        split_name="train",
+        allowed_task_ids={"train-task"},
+        world_size=world_size,
+    )
+    opened: list[str] = []
+    original_loader = uitars_collator._load_shard_records
+
+    def tracking_loader(shard_path: Path):
+        opened.append(shard_path.name)
+        return original_loader(shard_path)
+
+    monkeypatch.setattr(uitars_collator, "_load_shard_records", tracking_loader)
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("WORLD_SIZE", str(world_size))
+    list(DataLoader(uitars_collator.PretokenizedUitarsDataset(pretokenized_dir, split="train")))
+    assert opened
+    assert len(opened) < len(train_records) + len(val_records)
+    assert all(name in {f"shard-{idx:05d}.pt" for idx in (0, 2, 4, 6, 8)} for name in opened)
+
+
+def test_pretokenized_shard_index_fallback_without_index(tmp_path, monkeypatch):
+    uitars_collator = import_training_module("uitars_collator")
+    pretokenized_dir = tmp_path / "pretokenized"
+    train_records = [_record(idx, "train-task") for idx in range(6)]
+    _write_split_pretokenized_dir(
+        pretokenized_dir,
+        train_records=train_records,
+        val_records=[],
+    )
+    (pretokenized_dir / "split.json").write_text(
+        (pretokenized_dir / "split.json").read_text(encoding="utf-8").replace(
+            '"val_task_ids": ["val-task"]',
+            '"val_task_ids": []',
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RANK", "1")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    dataset = uitars_collator.PretokenizedUitarsDataset(pretokenized_dir, split="train")
+    assert len(dataset) == 3
+    rows = _collect_rank_items(dataset)
+    assert len(rows) == 3
+    assert [int(item["features"]["input_ids"].item()) for item in rows] == [1, 3, 5]
+
+
 def test_pretokenized_dataset_record_sharding_matches_rank_length(tmp_path, monkeypatch):
     uitars_collator = import_training_module("uitars_collator")
     pretokenized_dir = tmp_path / "pretokenized"

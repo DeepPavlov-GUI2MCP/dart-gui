@@ -13,6 +13,7 @@ from torch.utils.data import Dataset, IterableDataset, get_worker_info
 from tqdm import tqdm
 
 from microaction_split import load_split, normalize_pretokenized_split, split_path
+from pretokenized_shard_index import get_split_world_entry, load_shard_index
 from uitars_format import UitarsFormatSettings, resolve_staged_messages
 
 
@@ -340,6 +341,7 @@ class PretokenizedUitarsDataset(IterableDataset):
     ) -> None:
         self.pretokenized_dir = Path(pretokenized_dir)
         self.split = normalize_pretokenized_split(split)
+        self.smoke_microactions = smoke_microactions
         self.manifest = _load_pretokenized_manifest(self.pretokenized_dir)
         split_payload = load_split(self.pretokenized_dir, smoke_microactions=smoke_microactions)
         split = normalize_pretokenized_split(split)
@@ -377,6 +379,13 @@ class PretokenizedUitarsDataset(IterableDataset):
     def _rank_length(self) -> int:
         rank, world_size = self._rank_info()
         if self.split_row_count is not None:
+            world_entry = self._split_world_entry(world_size)
+            if world_entry is not None:
+                ranks = world_entry.get("ranks")
+                if isinstance(ranks, list) and rank < len(ranks):
+                    rank_entry = ranks[rank]
+                    if isinstance(rank_entry, dict) and isinstance(rank_entry.get("rows"), int):
+                        return int(rank_entry["rows"])
             if world_size == 1:
                 return self.split_row_count
             base = self.split_row_count // world_size
@@ -391,6 +400,17 @@ class PretokenizedUitarsDataset(IterableDataset):
     def _worker_length(rank_length: int, worker_id: int, worker_count: int) -> int:
         base = rank_length // worker_count
         return base + int(worker_id < rank_length % worker_count)
+
+    def _split_world_entry(self, world_size: int) -> dict[str, Any] | None:
+        if self.allowed_task_ids is None or world_size <= 1:
+            return None
+        shard_index = load_shard_index(
+            self.pretokenized_dir,
+            smoke_microactions=self.smoke_microactions,
+        )
+        if shard_index is None:
+            return None
+        return get_split_world_entry(shard_index, split_name=self.split, world_size=world_size)
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         if index < 0 or index >= self.cumulative_counts[-1]:
@@ -451,6 +471,123 @@ class PretokenizedUitarsDataset(IterableDataset):
         worker_length = self._worker_length(self._rank_length(), worker_id, worker_count)
         if worker_length == 0:
             return
+        if world_size > 1:
+            world_entry = self._split_world_entry(world_size)
+            if world_entry is not None:
+                yield from self._iter_record_sharded_indexed(
+                    world_entry,
+                    rank=rank,
+                    world_size=world_size,
+                    worker_id=worker_id,
+                    worker_count=worker_count,
+                    worker_length=worker_length,
+                )
+                return
+        yield from self._iter_record_sharded_full_scan(
+            rank=rank,
+            world_size=world_size,
+            worker_id=worker_id,
+            worker_count=worker_count,
+            worker_length=worker_length,
+        )
+
+    def _iter_record_sharded_indexed(
+        self,
+        world_entry: dict[str, Any],
+        *,
+        rank: int,
+        world_size: int,
+        worker_id: int,
+        worker_count: int,
+        worker_length: int,
+    ):
+        ranks = world_entry.get("ranks")
+        shard_starts = world_entry.get("shard_starts")
+        if not isinstance(ranks, list) or rank >= len(ranks):
+            yield from self._iter_record_sharded_full_scan(
+                rank=rank,
+                world_size=world_size,
+                worker_id=worker_id,
+                worker_count=worker_count,
+                worker_length=worker_length,
+            )
+            return
+        rank_entry = ranks[rank]
+        if not isinstance(rank_entry, dict):
+            yield from self._iter_record_sharded_full_scan(
+                rank=rank,
+                world_size=world_size,
+                worker_id=worker_id,
+                worker_count=worker_count,
+                worker_length=worker_length,
+            )
+            return
+        assigned_shard_names = rank_entry.get("shards")
+        if not isinstance(assigned_shard_names, list):
+            yield from self._iter_record_sharded_full_scan(
+                rank=rank,
+                world_size=world_size,
+                worker_id=worker_id,
+                worker_count=worker_count,
+                worker_length=worker_length,
+            )
+            return
+        if not isinstance(shard_starts, dict):
+            shard_starts = {}
+        shard_path_by_name = {path.name: path for path in self.shard_paths}
+        shard_local = world_entry.get("assignment") == "shard_local"
+        progress = tqdm(
+            assigned_shard_names,
+            desc=f"rank {rank} streaming assigned pretokenized shards",
+            unit="shard",
+            mininterval=1.0,
+            file=sys.stderr,
+        )
+        rank_local_index = 0
+        yielded = 0
+        for shard_name in progress:
+            shard_path = shard_path_by_name.get(shard_name)
+            if shard_path is None:
+                continue
+            filtered_index = int(shard_starts.get(shard_name, 0))
+            records = _load_shard_records(shard_path)
+            progress.set_postfix(records=filtered_index, last=shard_name, refresh=False)
+            for record in records:
+                if not self._record_matches_split(record):
+                    continue
+                if shard_local:
+                    if rank_local_index % worker_count != worker_id:
+                        rank_local_index += 1
+                        continue
+                    yield self._record_to_item(record)
+                    yielded += 1
+                    rank_local_index += 1
+                    if yielded >= worker_length:
+                        return
+                    continue
+                if filtered_index % world_size != rank:
+                    filtered_index += 1
+                    continue
+                if rank_local_index % worker_count != worker_id:
+                    rank_local_index += 1
+                    filtered_index += 1
+                    continue
+                yield self._record_to_item(record)
+                yielded += 1
+                rank_local_index += 1
+                filtered_index += 1
+                if yielded >= worker_length:
+                    return
+
+    def _iter_record_sharded_full_scan(
+        self,
+        *,
+        rank: int,
+        world_size: int,
+        worker_id: int,
+        worker_count: int,
+        worker_length: int,
+    ):
         progress = tqdm(
             self.shard_paths,
             desc=f"rank {rank} streaming pretokenized shards",

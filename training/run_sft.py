@@ -920,6 +920,7 @@ def prepare_staged_dataset(
 def ensure_pretokenized_split(config: ResolvedConfig, pretokenized_dir: Path) -> None:
     from microaction_split import compute_split_for_training_rows, load_split, write_split
     from pretokenized_manifest import load_jsonl_rows
+    from pretokenized_shard_index import ensure_shard_indexes
 
     if not config.dataset.task_examples_dir:
         raise ValueError(
@@ -937,9 +938,18 @@ def ensure_pretokenized_split(config: ResolvedConfig, pretokenized_dir: Path) ->
     )
     smoke_microactions = config.dataset.smoke_microactions
     existing = load_split(pretokenized_dir, smoke_microactions=smoke_microactions)
-    if existing is not None and existing.to_dict() == split.to_dict():
-        return
-    write_split(pretokenized_dir, split, smoke_microactions=smoke_microactions)
+    if existing is None or existing.to_dict() != split.to_dict():
+        write_split(pretokenized_dir, split, smoke_microactions=smoke_microactions)
+    world_size = max(1, int(os.environ.get("WORLD_SIZE", "1")))
+    ensure_shard_indexes(
+        pretokenized_dir,
+        split_task_ids={
+            "train": split.task_ids_for("train") or set(),
+            "val": split.task_ids_for("val") or set(),
+        },
+        world_size=world_size,
+        smoke_microactions=smoke_microactions,
+    )
 
 
 def train(

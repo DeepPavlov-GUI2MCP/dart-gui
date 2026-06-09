@@ -406,6 +406,21 @@ def write_pretokenized_split(
         smoke_microactions=settings.smoke_microactions,
     )
     write_split(output_dir, split, smoke_microactions=settings.smoke_microactions)
+    if list(Path(output_dir).glob("shard-*.pt")):
+        import os
+
+        from pretokenized_shard_index import ensure_shard_indexes
+
+        world_size = max(1, int(os.environ.get("WORLD_SIZE", "1")))
+        ensure_shard_indexes(
+            output_dir,
+            split_task_ids={
+                "train": split.task_ids_for("train") or set(),
+                "val": split.task_ids_for("val") or set(),
+            },
+            world_size=world_size,
+            smoke_microactions=settings.smoke_microactions,
+        )
     return split
 
 
